@@ -1,0 +1,16 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Flex Simulator",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/simulate.py",
+            "cwd": "${workspaceFolder}",
+            "python": "C:/Users/1khan/AppData/Local/Python/pythoncore-3.14-64/python.exe",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "subProcess": false
+        }
+    ]
+}

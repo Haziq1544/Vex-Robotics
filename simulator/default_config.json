@@ -1,0 +1,53 @@
+{
+  "field": {"width_mm": 3568.7, "height_mm": 3568.7, "tile_mm": 600.0},
+  "robot": {
+    "body_length_mm": 430.0,
+    "body_width_mm": 400.0,
+    "wheel_diameter_mm": 101.6,
+    "track_width_mm": 330.0,
+    "external_ratio": 1.0,
+    "mass_kg": 6.5,
+    "motor_free_rpm": 200.0,
+    "motor_stall_torque_nm": 1.05,
+    "left_port": 9,
+    "right_port": 10,
+    "left_mount_sign": 1,
+    "right_mount_sign": -1,
+    "gps_port": 18,
+    "gps_x_mm": 0.0,
+    "gps_y_mm": -53.34,
+    "gps_heading_deg": 180.0
+  },
+  "physics": {
+    "traction_mu": 0.8,
+    "lateral_mu": 0.15,
+    "rolling_drag_n_per_m_s": 1.2,
+    "lateral_damping_per_s": 8.0,
+    "motor_response_s": 0.07,
+    "brake_response_s": 0.04,
+    "coast_response_s": 1.5,
+    "wheel_effective_mass_kg": 1.0,
+    "tire_stiffness_n_per_m_s": 90.0,
+    "yaw_drag_nm_per_rad_s": 0.03,
+    "inertia_scale": 1.0,
+    "restitution": 0.05
+  },
+  "gps": {
+    "sample_hz": 20.0,
+    "latency_ms": 80.0,
+    "position_noise_mm": 3.0,
+    "heading_noise_deg": 0.25,
+    "turn_dropout_deg_s": 100.0,
+    "wall_min_distance_mm": 100.0
+  },
+  "simulation": {"step_ms": 5.0, "seed": 7},
+  "notes": [
+    "Estimated Flex geometry and mass from supplied build diagrams: 430 x 400 mm footprint, 330 mm track, 6.5 kg. Replace with measurements.",
+    "Powered wheels modeled as 4 inch (101.6 mm) omnis; check actual effective rolling diameter. external_ratio means motor revolutions per wheel revolution.",
+    "Field uses nominal 140.5 inch wall-to-wall interior; 600 mm tile pitch is illustrative and edge tiles are trimmed by perimeter.",
+    "Green 200 RPM is specified by VEX. 1.05 Nm is an ideal gear-ratio estimate from the documented 2.1 Nm red100 RPM stall torque.",
+    "All friction, motor response, wheel inertia, GPS noise/delay/dropout settings are tunable approximations, not measured VEX specifications.",
+    "Robot collision shape is a fixed rectangle centered at the drive turning center; raised/folded mechanisms are not separately simulated.",
+    "Physical GPS mount is independent of Gps(...) code offsets: wrong code offsets produce biased simulated readings. Ports remain 9, 10 and 18."
+  ]
+}
