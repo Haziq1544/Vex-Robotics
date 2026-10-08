@@ -11,7 +11,7 @@ from typing import Any
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from .field_elements import (ELEMENT_SPECS, PRESETS, element_polygon,
+from .field_elements import (ELEMENT_SPECS, ACTIVE_ELEMENT_SPECS, PRESETS, element_polygon,
                              make_element, materialize_layout, resolve_elements,
                              set_preset, validate_layout)
 
@@ -302,10 +302,10 @@ class SimulatorApp:
         self._section(parent, "ADD ELEMENTS", top=18)
         ttk.Label(parent, text="Drag an item onto the field, or click it and then click the field. Esc cancels placement.",
                   style="Muted.TLabel", wraplength=260).pack(anchor="w", pady=(5, 8))
-        self.palette = tk.Canvas(parent, width=285, height=36 * len(ELEMENT_SPECS),
+        self.palette = tk.Canvas(parent, width=285, height=36 * len(ACTIVE_ELEMENT_SPECS),
                                  bg=PANEL, highlightthickness=0, cursor="hand2")
         self.palette.pack(fill="x")
-        for index, (kind, spec) in enumerate(ELEMENT_SPECS.items()):
+        for index, (kind, spec) in enumerate(ACTIVE_ELEMENT_SPECS.items()):
             top = index * 36
             tags = ("palette", "kind:" + kind)
             self.palette.create_rectangle(0, top + 1, 285, top + 33, fill="#24333f",
@@ -332,8 +332,8 @@ class SimulatorApp:
             button = ttk.Button(row, text=label, command=command)
             button.pack(side="left", expand=True, fill="x", padx=(0, 5))
             self._editor_buttons.append(button)
-        ttk.Label(parent, text="Goals and loaders are fixed collision obstacles. Cups/stackers are visual placeholders "
-                  "for later; the robot can pass through them. Red outlines mean contact. Pins are omitted. "
+        ttk.Label(parent, text="Only goals and loaders are enabled. They stay anchored during a run "
+                  "and block the robot. Red outlines mean contact. "
                   "The centre goal blocks main.py's current target.",
                   style="Muted.TLabel", wraplength=260).pack(anchor="w")
 
@@ -429,6 +429,9 @@ class SimulatorApp:
         return candidate
 
     def _place_element(self, kind, x, y):
+        if kind not in ACTIVE_ELEMENT_SPECS:
+            self.status.set("This element is reserved for a later update")
+            return False
         element = make_element(kind, x, y)
         if self._commit_layout(self._element_candidate(element), "Added " + ELEMENT_SPECS[kind]["label"]):
             self.selected_element = element["id"]
@@ -811,7 +814,7 @@ class SimulatorApp:
                           fill=color, stipple="gray50", outline=color, width=2)
 
     def _draw_field_guides(self):
-        """Tape and perimeter toggles are visual guides, not floor obstacles."""
+        """Show floor tape; goals and loaders are the only visible game objects."""
         preset = self.config.get("layout", {}).get("preset", "empty")
         if preset != "override" and not (preset == "custom" and self._reset_preset == "override"):
             return
@@ -832,19 +835,13 @@ class SimulatorApp:
                           (side * half_w, end * (half_h - 650)))
                 self.canvas.create_line(*[coordinate for point in points for coordinate in self._point(*point)],
                                          fill=color, width=2)
-        for vertical in (False, True):
-            for sign in (-1, 1):
-                if vertical:
-                    a, b = self._point(sign * half_w, -330.1), self._point(sign * half_w, 330.1)
-                else:
-                    a, b = self._point(-330.1, sign * half_h), self._point(330.1, sign * half_h)
-                self.canvas.create_line(*a, *b, fill=AMBER, width=5)
-
     def _draw_elements(self, scale):
         elements = self.world.get("elements") if self.snapshot is not None else None
         if elements is None:
             elements = resolve_elements(self.config)
         for element in elements:
+            if element["kind"] not in ACTIVE_ELEMENT_SPECS:
+                continue
             spec = ELEMENT_SPECS[element["kind"]]
             selected = element["id"] == self.selected_element and not self._running()
             color = spec["color"]

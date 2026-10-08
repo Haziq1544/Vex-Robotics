@@ -2,7 +2,7 @@
 
 See FIELD_SOURCES.md for drawing provenance and approximations. Elements use
 the same clockwise-from-+Y convention as the robot. Goals and simplified loader
-footprints are fixed. Cups/stackers and wall-top toggles are visual placeholders.
+footprints are fixed. Cup/stacker definitions are retained but disabled.
 """
 from copy import deepcopy
 import math
@@ -10,7 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 
-PRESETS = {"empty": "Empty field", "override": "Override (no pins)", "custom": "Custom"}
+PRESETS = {"empty": "Empty field", "override": "Override (goals + loaders)", "custom": "Custom"}
 
 _GOAL = dict(width_mm=142.5, depth_mm=142.5, movable=False, collidable=True,
              hole_diameter_mm=60.1, radius_mm=81.9)
@@ -20,10 +20,11 @@ ELEMENT_SPECS: dict[str, dict[str, Any]] = {
     "goal_red": dict(_GOAL, label="Red goal", height_mm=82.5, color="#d95059", tag_id=2),
     "goal_blue": dict(_GOAL, label="Blue goal", height_mm=82.5, color="#318bc3", tag_id=3),
     "cup": dict(label="Cup / stacker (later)", width_mm=80.2, depth_mm=80.2, height_mm=164.5,
-                color="#aeb8bf", movable=False, collidable=False),
+                color="#aeb8bf", movable=False, collidable=False, enabled=False),
     "loader": dict(label="Loader", width_mm=95.0, depth_mm=102.1, height_mm=365.0,
                    color="#80919d", movable=False, collidable=True),
 }
+ACTIVE_ELEMENT_SPECS = {kind: spec for kind, spec in ELEMENT_SPECS.items() if spec.get("enabled", True)}
 
 
 def element_spec(kind):
@@ -84,6 +85,13 @@ def _override_elements(config):
         for sy in (-1, 1):
             elements.append(make_element("loader", sx * (hw - 47.5), sy * (hh - 290.6),
                                          element_id="loader_%s_%s" % (sx, sy)))
+    return elements
+
+
+def _override_cups(config):
+    """Reserved layout for future cup/stacker support; never added to active layouts."""
+    elements = []
+    hw, hh = config["field"]["width_mm"] / 2, config["field"]["height_mm"] / 2
     cup_points = [(sx * dist, sy * dist) for dist in (598.1, 1196.1)
                   for sx in (-1, 1) for sy in (-1, 1)]
     cup_points += [(-598.1, 0), (598.1, 0), (0, -598.1), (0, 598.1)]
@@ -101,7 +109,8 @@ def _override_elements(config):
     return elements
 
 
-def resolve_elements(config):
+def stored_elements(config):
+    """Return authored data, including disabled kinds in older saved layouts."""
     layout = config.get("layout", {"preset": "empty", "elements": []})
     if not isinstance(layout, dict) or not isinstance(layout.get("preset"), str) or layout["preset"] not in PRESETS:
         raise ValueError("layout.preset must be empty, override or custom")
@@ -109,6 +118,21 @@ def resolve_elements(config):
     if preset == "override":
         return _override_elements(config)
     return deepcopy(layout.get("elements", [])) if preset == "custom" else []
+
+
+def resolve_elements(config):
+    """Only enabled elements participate in the runtime and field editor."""
+    result = []
+    elements = stored_elements(config)
+    if not isinstance(elements, list):
+        raise ValueError("layout.elements must be a list")
+    for element in elements:
+        if not isinstance(element, dict):
+            raise ValueError("Each field element must be an object")
+        spec = element_spec(element.get("kind"))
+        if spec.get("enabled", True):
+            result.append(element)
+    return result
 
 
 def set_preset(config, preset):
@@ -122,7 +146,7 @@ def set_preset(config, preset):
 
 
 def materialize_layout(config):
-    config["layout"] = {"preset": "custom", "elements": resolve_elements(config)}
+    config["layout"] = {"preset": "custom", "elements": stored_elements(config)}
     return config["layout"]["elements"]
 
 
@@ -130,7 +154,7 @@ def validate_layout(config):
     """Validate saved layouts without mutating them; touching footprints are OK."""
     from .collisions import polygons_overlap
     layout = config.get("layout", {"preset": "empty", "elements": []})
-    elements = resolve_elements(config)
+    elements = stored_elements(config)
     if not isinstance(layout.get("elements", []), list):
         raise ValueError("layout.elements must be a list")
     if layout["preset"] != "custom" and layout.get("elements"):
@@ -145,13 +169,15 @@ def validate_layout(config):
         if not isinstance(identity, str) or not identity.strip() or identity in ids:
             raise ValueError("Field elements need unique, nonempty string IDs")
         ids.add(identity)
-        element_spec(element.get("kind"))
+        spec = element_spec(element.get("kind"))
         for key in ("x_mm", "y_mm", "heading_deg"):
             value = element.get(key)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
                 raise ValueError(identity + "." + key + " must be a finite number")
         if element.get("face", "clear") not in ("clear", "opaque"):
             raise ValueError(identity + ".face must be clear or opaque")
+        if not spec.get("enabled", True):
+            continue  # Retain saved data without constraining the active field.
         polygon = element_polygon(element)
         if any(abs(x) > config["field"]["width_mm"] / 2 + 1e-6 or
                abs(y) > config["field"]["height_mm"] / 2 + 1e-6 for x, y in polygon):

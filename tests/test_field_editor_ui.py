@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from simulator.config import load_config
-from simulator.field_elements import ELEMENT_SPECS, PRESETS, resolve_elements
+from simulator.field_elements import ACTIVE_ELEMENT_SPECS, PRESETS, make_element, resolve_elements
 from simulator.ui import ModelSettings, SimulatorApp
 
 
@@ -45,7 +45,7 @@ class FieldEditorTests(unittest.TestCase):
         self.root.update()
 
     def palette_press(self, kind):
-        index = list(ELEMENT_SPECS).index(kind)
+        index = list(ACTIVE_ELEMENT_SPECS).index(kind)
         self.app.palette.event_generate("<ButtonPress-1>", x=20, y=index * 36 + 17)
         self.root.update()
 
@@ -61,7 +61,7 @@ class FieldEditorTests(unittest.TestCase):
     def test_preset_dropdown_and_restore_after_custom_move(self):
         self.choose("override")
         initial = resolve_elements(self.app.config)
-        self.assertEqual(len(initial), 49)
+        self.assertEqual(len(initial), 13)
         self.assertEqual(self.app.config["layout"]["preset"], "override")
         # A selection alone must not replace a preset with Custom.
         self.field_event("<ButtonPress-1>", 0, 0)
@@ -86,8 +86,8 @@ class FieldEditorTests(unittest.TestCase):
         self.assertIsNone(self.app._place_kind)
 
     def test_palette_click_then_field_click_and_escape(self):
-        self.palette_press("cup")
-        index = list(ELEMENT_SPECS).index("cup")
+        self.palette_press("goal_neutral")
+        index = list(ACTIVE_ELEMENT_SPECS).index("goal_neutral")
         self.app.palette.event_generate("<ButtonRelease-1>", x=20, y=index * 36 + 17)
         self.field_event("<ButtonPress-1>", 500, 600)
         self.assertEqual(len(resolve_elements(self.app.config)), 1)
@@ -118,8 +118,8 @@ class FieldEditorTests(unittest.TestCase):
         self.app.delete_button.invoke()
         self.assertEqual(resolve_elements(self.app.config), [])
 
-    def test_reset_preserves_authored_layout_and_clears_pushed_snapshot(self):
-        self.app._place_element("cup", 500, 700)
+    def test_reset_preserves_authored_layout_and_clears_old_snapshot(self):
+        self.app._place_element("goal_neutral", 500, 700)
         authored = resolve_elements(self.app.config)
         pushed = copy.deepcopy(authored)
         pushed[0]["x_mm"] = 900
@@ -131,7 +131,7 @@ class FieldEditorTests(unittest.TestCase):
         self.assertEqual(self.app.config["layout"]["preset"], "custom")
 
     def test_save_load_uses_authored_positions_and_model_retains_layout(self):
-        self.app._place_element("cup", 500, 700)
+        self.app._place_element("goal_neutral", 500, 700)
         authored = copy.deepcopy(self.app.config["layout"])
         pushed = resolve_elements(self.app.config)
         pushed[0]["x_mm"] = 1000
@@ -164,7 +164,7 @@ class FieldEditorTests(unittest.TestCase):
         self.app._update_controls()
         self.assertEqual(str(self.app.layout_combo.cget("state")), "disabled")
         self.assertEqual(str(self.app.restore_layout_button.cget("state")), "disabled")
-        self.app._place_element("cup", 500, 700)
+        self.app._place_element("goal_neutral", 500, 700)
         self.app.restore_layout()
         self.app.delete_selected()
         self.assertEqual(self.app.config, before)
@@ -189,6 +189,19 @@ class FieldEditorTests(unittest.TestCase):
                 self.app.load_layout()
         self.assertEqual(self.app.config, before)
         self.assertIn("Cannot place layout", self.app.status.get())
+
+    def test_stackers_are_absent_from_palette_and_legacy_layout_rendering(self):
+        palette_tags = [tag for item in self.app.palette.find_all() for tag in self.app.palette.gettags(item)]
+        self.assertNotIn("kind:cup", palette_tags)
+        self.assertFalse(self.app._place_element("cup", 500, 700))
+        goal = make_element("goal_red", 500, 700)
+        cup = make_element("cup", 0, 0)
+        self.app.config["layout"] = {"preset": "custom", "elements": [goal, cup]}
+        self.app._accept_snapshot({"world": dict(self.app.world, elements=[goal, cup]), "time_s": 1})
+        with patch.object(self.app, "_polygon", wraps=self.app._polygon) as draw_polygon:
+            self.app._draw_elements(self.app._transform[2])
+        self.assertEqual(draw_polygon.call_count, 1)
+        self.assertEqual(resolve_elements(self.app.config), [goal])
 
 
 if __name__ == "__main__":

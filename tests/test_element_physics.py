@@ -1,7 +1,6 @@
-"""Behavior checks for fixed obstacles and retained visual-only stackers."""
+"""Behavior checks for anchored obstacles and inactive future stackers."""
 
 from copy import deepcopy
-import math
 import unittest
 
 from simulator.collisions import polygon_contact, polygons_overlap
@@ -53,18 +52,42 @@ class ElementPhysicsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "test_goal"):
             self.world([make_element("goal_center", element_id="test_goal")], y_mm=0)
 
-    def test_head_on_goal_stops_robot_and_goal_remains_fixed(self):
-        goal = make_element("goal_center", element_id="goal")
-        world = self.world([goal])
-        touched = self.run_for(world, 3)
-        goal_edge = element_spec("goal_center")["depth_mm"] / 2
-        self.assertIn("goal", touched)
-        self.assertAlmostEqual(world.y_mm, -goal_edge - world.robot["body_length_mm"] / 2, delta=1)
-        self.assertAlmostEqual(world.x_mm, 0, delta=0.5)
-        self.assertAlmostEqual((world.heading_deg + 180) % 360 - 180, 0, delta=0.3)
-        self.assertEqual(world.elements[0], goal)
-        self.assertGreater(abs(world.snapshot()["left_position_deg"]), 500)
-        self.assert_clear(world)
+    def test_full_power_cannot_cross_or_move_any_goal_or_loader(self):
+        for kind in ("goal_center", "goal_neutral", "goal_red", "goal_blue", "loader"):
+            with self.subTest(kind=kind):
+                obstacle = make_element(kind, element_id="fixed_obstacle")
+                world = self.world([obstacle])
+                world.set_motor(9, {"percent": 100})
+                world.set_motor(10, {"percent": -100})
+                touched = set()
+                stop_y = -element_spec(kind)["depth_mm"] / 2 - world.robot["body_length_mm"] / 2
+                for _ in range(150):
+                    world.step(0.02)
+                    touched.update(world.collision_elements)
+                    self.assertLessEqual(world.y_mm, stop_y + 0.02)
+                    self.assertEqual(world.elements, [obstacle])
+                    self.assert_clear(world)
+                self.assertIn("fixed_obstacle", touched)
+                self.assertAlmostEqual(world.y_mm, stop_y, delta=1)
+                self.assertAlmostEqual(world.x_mm, 0, delta=1)
+                self.assertAlmostEqual((world.heading_deg + 180) % 360 - 180, 0, delta=0.3)
+                self.assertGreater(abs(world.snapshot()["left_position_deg"]), 500)
+
+    def test_wall_mounted_loader_remains_fixed_during_off_centre_impact(self):
+        config = default_config()
+        half_width = config["field"]["width_mm"] / 2
+        loader = make_element("loader", x_mm=-half_width + element_spec("loader")["width_mm"] / 2,
+                              element_id="wall_loader")
+        world = self.world([loader], x_mm=-half_width + config["robot"]["body_width_mm"] / 2)
+        world.set_motor(9, {"percent": 100})
+        world.set_motor(10, {"percent": -100})
+        touched = set()
+        for _ in range(150):
+            world.step(0.02)
+            touched.update(world.collision_elements)
+            self.assertEqual(world.elements, [loader])
+            self.assert_clear(world)
+        self.assertIn("wall_loader", touched)
 
     def test_angled_goal_impact_changes_heading_without_penetrating(self):
         world = self.world([make_element("goal_neutral", element_id="goal")],
@@ -102,43 +125,52 @@ class ElementPhysicsTests(unittest.TestCase):
         self.assertLess(world.y_mm, -200)
         self.assert_clear(world)
 
-    def test_visual_cup_does_not_move_or_block_robot_and_snapshot_is_independent(self):
+    def test_inactive_cup_is_absent_from_world_and_snapshot_but_retained_in_config(self):
         cup = make_element("cup", element_id="cup")
         original = deepcopy(cup)
         world = self.world([cup])
         touched = self.run_for(world, 1.7)
         self.assertNotIn("cup", touched)
         self.assertGreater(world.y_mm, 100)
-        self.assertEqual(world.elements[0], original)
+        self.assertEqual(world.elements, [])
+        self.assertEqual(world.snapshot()["elements"], [])
+        self.assertEqual(world.config["layout"]["elements"], [original])
         self.assertEqual(cup, original)
-        state = world.snapshot()
-        state["elements"][0]["x_mm"] = 999
-        self.assertNotEqual(world.elements[0]["x_mm"], 999)
         self.assert_clear(world)
 
-    def test_robot_passes_visual_cup_then_stops_at_goal(self):
+    def test_active_element_snapshot_is_independent(self):
+        goal = make_element("goal_center", element_id="goal")
+        world = self.world([goal])
+        state = world.snapshot()
+        state["elements"][0]["x_mm"] = 999
+        self.assertEqual(world.elements, [goal])
+
+    def test_inactive_cup_does_not_interfere_with_goal_collision(self):
         goal = make_element("goal_center", y_mm=250, element_id="goal")
         world = self.world([make_element("cup", element_id="cup"), goal])
         touched = self.run_for(world, 3)
         self.assertNotIn("cup", touched)
         self.assertIn("goal", touched)
-        self.assertEqual(world.elements[1], goal)
-        self.assertEqual(world.elements[0]["y_mm"], 0)
+        self.assertEqual(world.elements, [goal])
+        self.assertEqual(world.snapshot()["elements"], [goal])
         self.assertLess(world.y_mm, 250)
         self.assert_clear(world, tolerance=0.15)
 
-    def test_multiple_visual_cups_remain_in_place_during_run(self):
+    def test_saved_cups_remain_in_config_without_creating_physics_bodies(self):
         diameter = element_spec("cup")["width_mm"]
         cups = [make_element("cup", y_mm=i * diameter, element_id="cup" + str(i)) for i in range(3)]
         world = self.world(cups)
         self.run_for(world, 2)
-        self.assertEqual(world.elements, cups)
+        self.assertEqual(world.elements, [])
+        self.assertEqual(world._element_bodies, [])
+        self.assertEqual(world.config["layout"]["elements"], cups)
         self.assertGreater(world.y_mm, 240)
         self.assert_clear(world, tolerance=0.15)
 
-    def test_robot_can_start_on_visual_placeholder(self):
+    def test_robot_can_start_at_inactive_cup_position(self):
         world = self.world([make_element("cup", element_id="cup")], y_mm=0)
-        self.assertEqual(world.elements[0]["y_mm"], 0)
+        self.assertEqual(world.elements, [])
+        self.assertEqual(world.snapshot()["elements"], [])
         self.assertEqual(world._element_bodies, [])
 
     def test_rotating_rectangle_hits_nearby_obstacle(self):
@@ -154,7 +186,10 @@ class ElementPhysicsTests(unittest.TestCase):
         world = World(config, {"x_mm": 0, "y_mm": -1000, "heading_deg": 0})
         original = deepcopy(world.elements)
         self.run_for(world, 0.2, left=0, right=0)
-        self.assertEqual(len(world.elements), 49)
+        self.assertEqual(len(world.elements), 13)
+        self.assertEqual(sum(element["kind"].startswith("goal_") for element in world.elements), 9)
+        self.assertEqual(sum(element["kind"] == "loader" for element in world.elements), 4)
+        self.assertNotIn("cup", {element["kind"] for element in world.snapshot()["elements"]})
         for before, after in zip(original, world.elements):
             self.assertAlmostEqual(before["x_mm"], after["x_mm"], places=4)
             self.assertAlmostEqual(before["y_mm"], after["y_mm"], places=4)

@@ -46,22 +46,21 @@ Defaults are stored in `simulator/default_config.json`:
 | External drive ratio | 1:1 | Your stated gearing |
 | Physics step | 5 ms | Simulation setting |
 
-The field model includes perimeter walls, fixed goals and loaders, and visual-only cup/stacker placeholders. The robot uses a fixed collision rectangle rather than individually moving lift and claw parts.
+The field model includes perimeter walls, fixed goals and loaders. The robot uses a fixed collision rectangle rather than individually moving lift and claw parts.
 
 ## Field layouts and collision testing
 
-The desktop launcher opens **Override (no pins)**. In the **Field** tab, use the
+The desktop launcher opens **Override (goals + loaders)**. In the **Field** tab, use the
 layout dropdown to switch between that preset, an empty field, and a custom
 layout. The preset matches the uploaded **head-to-head** overhead image, with
-all scoring pins removed. It is not the separate Robot Skills starting setup.
+only goals and loaders enabled. It is not the separate Robot Skills starting setup.
 
-The layout contains **9 anchored goals, 4 anchored loaders, and 36 cup placeholders**.
-The four wall-top toggles and tape are drawn as reference markings. Toggle
-mechanisms, scoring, stacking, tipping, vision sensing, and obstacle avoidance
-are not part of this change. Cups are grey/transparent, not alliance coloured.
-For this testing phase, cups/stackers remain visible and available in the palette
-but have no motion or collision response: the robot can pass through them.
-Only goals, loaders, and the perimeter are physical obstacles.
+The layout contains **9 anchored goals and 4 anchored loaders**. They block the
+robot and cannot be pushed or rotated by it during a run. Floor tape remains as
+a visual guide. Pins, cups/stackers, and wall-top toggles are not displayed.
+Cup/stacker definitions and placement code are retained for later, but disabled
+in the preset, palette, and runtime. Loading an older layout preserves its saved
+stacker data without displaying or simulating those pieces.
 
 While stopped, drag an element from the palette onto the field, or select a
 palette item and click its destination. Drag existing elements to move them;
@@ -83,8 +82,8 @@ to the robot program.
 
 Official dimensions, coordinates, and simplifications are documented in
 [FIELD_SOURCES.md](FIELD_SOURCES.md). These are 2D rigid footprints; they cannot
-predict whether a raised mechanism can pass over an object. Cup/stacker physics
-will be implemented later.
+predict whether a raised mechanism can pass over an object. Scoring, vision,
+obstacle avoidance, and cup/stacker behavior will be implemented later.
 
 ## Run without a window
 

@@ -52,7 +52,7 @@ class World:
         for element in self.elements:
             spec = element_spec(element["kind"])
             if not spec["collidable"]:
-                continue  # Cups/stackers stay visible but have no physics yet.
+                continue  # Future non-colliding kinds must not create bodies.
             centered = dict(element, x_mm=0.0, y_mm=0.0, heading_deg=0.0)
             local = element_polygon(centered)
             self._element_bodies.append(Body(local, element["x_mm"], element["y_mm"],

@@ -1,8 +1,8 @@
 # Override field measurements and simulation assumptions
 
 The Override preset follows the supplied overhead image's **head-to-head starting
-layout**, with every scoring pin removed. It retains nine goals, four loaders,
-four wall-top toggles, and 36 visual-only cups. This is a collision-testing layout, not a
+layout**, with only nine goals and four loaders enabled. Pins, stackers/cups,
+and wall-top toggles are not displayed. This is a collision-testing layout, not a
 complete match or scoring simulator. It is not the distinct Robot Skills setup.
 
 Dimensions below were checked against VEX's Appendix A engineering drawings on
@@ -62,10 +62,10 @@ small fasteners, and taper with height are not separate collision shapes.
 
 The [cup specification drawing](https://content.vexrobotics.com/docs/2026-2027/override/online-manual/assets/image/CupSpecs.png)
 gives an 80.2 mm maximum diameter, 59 mm waist diameter, and 164.5 mm height.
-The drawing uses a 16-sided outline at radius 40.1 mm. Real cups are movable,
-but in this testing phase the simulator keeps the cup/stacker blocks as visual
-placeholders only. They do not move, block the robot, or participate in collisions.
-Their physical behavior will be implemented later.
+The retained geometry code uses a 16-sided outline at radius 40.1 mm. Cup/stacker
+definitions and the reserved placement helper are kept for later implementation.
+They are disabled: no cups appear in the active layout, editor palette, or
+runtime, including when loading old saved layouts that contain them.
 
 Cups have one opaque gray half and one transparent half; they are not red or
 blue. Colored centres in the supplied diagram represent pins inside cups and
@@ -73,7 +73,7 @@ are absent from this preset. The manual's game primer specifies 24 cups starting
 opaque-side-up along the perimeter and 12 starting clear-side-up in the interior.
 
 The [scoring object location drawing](https://content.vexrobotics.com/docs/2026-2027/override/online-manual/assets/image/ScoringObjectLocations.png)
-defines the retained 36 on-field cups:
+defines the 36 on-field cup positions retained in the unused placement helper:
 
 - Four at every sign combination of (+/-1196.1, +/-1196.1) mm.
 - Four at every sign combination of (+/-598.1, +/-598.1) mm.
@@ -109,7 +109,7 @@ the tapered top, individual mounting brackets, bolt heads, or height clearance.
 
 The [toggle specification drawing](https://content.vexrobotics.com/docs/2026-2027/override/online-manual/assets/image/ToggleSpecs.png)
 gives a 660.2 mm bar span and an axle 335.3 mm above the floor. One toggle is
-centred on each wall. These are drawn for orientation; the existing wall
+centred on each wall. These are omitted from the current view; the existing wall
 collision handles that boundary. They add no freestanding floor obstacle.
 Toggle rotation, elevated mechanism contact, and scoring are not modeled.
 

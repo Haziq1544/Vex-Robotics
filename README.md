@@ -18,10 +18,10 @@ In VS Code, select **Flex Simulator** in Run and Debug and press **F5**. The che
 
 Press **Run** inside the simulator. Save changes to `src/main.py`, then Stop and Run again to reload the robot program.
 
-On the simulator testing branch, the **Field** tab offers **Override (no pins)**,
+On the simulator testing branch, the **Field** tab offers **Override (goals + loaders)**,
 **Empty field**, and custom layouts with drag-and-drop editing and JSON save/load.
-Goals and loaders are fixed collision obstacles. Cup/stacker blocks remain
-visual placeholders for later implementation. The current robot code targets
+Goals and loaders are fixed collision obstacles. Cup/stacker code is retained
+but disabled: no stackers appear in the field, palette or simulation. The current robot code targets
 the centre goal's location, so contact and a no-progress stop are expected on
 Override; choose Empty field for the original centre-arrival test.
 

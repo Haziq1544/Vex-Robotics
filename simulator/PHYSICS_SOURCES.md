@@ -13,11 +13,11 @@ The engine integrates wheel inertia and robot mass/yaw inertia; motor speed feed
 
 GPS is sampled with configurable delay/noise. In realistic mode, facing a wall too closely or exceeding a configured turn rate degrades quality; the dropout button supplies repeatable test failures. It does not render a camera image or decode field strips, so these conditions cannot predict exactly when the real GPS loses lock. Game elements do not occlude the simulated GPS or add vision detections.
 
-The optional Override layout adds fixed convex goal/loader footprints and visual-only
-cup/stacker placeholders. Contact impulses account for robot translation/rotation;
+The optional Override layout adds fixed convex goal/loader footprints.
+Contact impulses account for robot translation/rotation;
 position correction and movement-limited substeps prevent ordinary drive-speed
-overlaps. Cups are drawn with 16-sided polygons at their 80.2 mm maximum diameter,
-but have no runtime collision body or motion in this testing phase.
+overlaps. Cup/stacker definitions are retained for later, but these pieces are
+excluded from the active field, editor palette, rendering, and runtime.
 Rounded goal edges are sampled with polygon segments. The
 engine does not model vertical clearance, tipping, lifting or stacking. See
 [FIELD_SOURCES.md](FIELD_SOURCES.md) for the official field geometry and placement.

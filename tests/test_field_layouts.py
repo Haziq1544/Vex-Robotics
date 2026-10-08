@@ -11,7 +11,7 @@ from simulate import run_headless
 from simulator.config import default_config, load_config, validate_config
 from simulator.field_elements import (
     element_polygon, element_spec, make_element, materialize_layout,
-    resolve_elements, set_preset,
+    resolve_elements, stored_elements, set_preset, _override_cups,
 )
 
 
@@ -28,10 +28,8 @@ class OverrideLayoutTests(unittest.TestCase):
         counts = Counter(element["kind"] for element in elements)
         self.assertEqual(counts, {"goal_center": 1, "goal_neutral": 4,
                                   "goal_red": 2, "goal_blue": 2,
-                                  "loader": 4, "cup": 36})
-        self.assertEqual(len({element["id"] for element in elements}), 49)
-        # Also exercises all-pair overlap and field-boundary validation. Cups
-        # deliberately touch their neighbours and walls in this valid preset.
+                                  "loader": 4})
+        self.assertEqual(len({element["id"] for element in elements}), 13)
         validate_config(self.config)
 
     def test_goals_match_the_audience_view_and_centre_origin(self):
@@ -61,8 +59,9 @@ class OverrideLayoutTests(unittest.TestCase):
                 self.assertAlmostEqual(element_spec(kind)["height_mm"], height)
                 self.assertFalse(element_spec(kind)["movable"])
 
-    def test_cup_footprints_faces_and_perimeter_groups(self):
-        cups = [e for e in resolve_elements(self.config) if e["kind"] == "cup"]
+    def test_reserved_cup_geometry_remains_available_without_enabling_it(self):
+        self.assertFalse(any(e["kind"] == "cup" for e in resolve_elements(self.config)))
+        cups = _override_cups(self.config)
         self.assertEqual(Counter(cup["face"] for cup in cups), {"clear": 12, "opaque": 24})
         clear_points = {(cup["x_mm"], cup["y_mm"]) for cup in cups if cup["face"] == "clear"}
         self.assertEqual(clear_points, {
@@ -154,7 +153,8 @@ class LayoutPersistenceAndValidationTests(unittest.TestCase):
             path.write_text(json.dumps(self.config), encoding="utf-8")
             loaded = load_config(path)
         self.assertEqual(loaded, self.config)
-        self.assertEqual(resolve_elements(loaded), self.config["layout"]["elements"])
+        self.assertEqual(stored_elements(loaded), self.config["layout"]["elements"])
+        self.assertEqual(resolve_elements(loaded), self.config["layout"]["elements"][:1])
         loaded["layout"]["elements"][0]["x_mm"] = 0
         self.assertEqual(self.config["layout"]["elements"][0]["x_mm"], -400.5)
 
@@ -188,7 +188,7 @@ class LayoutPersistenceAndValidationTests(unittest.TestCase):
 
     def test_overlapping_elements_and_rotated_out_of_bounds_are_rejected(self):
         config = deepcopy(self.config)
-        config["layout"]["elements"][1].update(x_mm=-400.5, y_mm=300.25)
+        config["layout"]["elements"][1].update(kind="goal_blue", x_mm=-400.5, y_mm=300.25)
         with self.assertRaisesRegex(ValueError, "overlaps"):
             validate_config(config)
         config = deepcopy(self.config)
@@ -210,6 +210,14 @@ class LayoutPersistenceAndValidationTests(unittest.TestCase):
                 config["layout"] = layout
                 with self.assertRaises(ValueError):
                     validate_config(config)
+
+    def test_legacy_hidden_stackers_do_not_constrain_active_layout(self):
+        config = deepcopy(self.config)
+        config["layout"]["elements"][1].update(x_mm=-400.5, y_mm=300.25)
+        validate_config(config)
+        materialize_layout(config)
+        self.assertEqual(len(stored_elements(config)), 2)
+        self.assertEqual(len(resolve_elements(config)), 1)
 
 
 class OverrideProgramExecutionTests(unittest.TestCase):
