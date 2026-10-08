@@ -1,5 +1,6 @@
 {
   "field": {"width_mm": 3568.7, "height_mm": 3568.7, "tile_mm": 600.0},
+  "layout": {"preset": "empty", "elements": []},
   "robot": {
     "body_length_mm": 430.0,
     "body_width_mm": 400.0,

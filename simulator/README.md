@@ -46,7 +46,45 @@ Defaults are stored in `simulator/default_config.json`:
 | External drive ratio | 1:1 | Your stated gearing |
 | Physics step | 5 ms | Simulation setting |
 
-The field model includes perimeter walls. Game pieces and scoring structures are not simulated, and the robot uses a fixed collision rectangle rather than individually moving lift and claw parts.
+The field model includes perimeter walls, fixed goals and loaders, and visual-only cup/stacker placeholders. The robot uses a fixed collision rectangle rather than individually moving lift and claw parts.
+
+## Field layouts and collision testing
+
+The desktop launcher opens **Override (no pins)**. In the **Field** tab, use the
+layout dropdown to switch between that preset, an empty field, and a custom
+layout. The preset matches the uploaded **head-to-head** overhead image, with
+all scoring pins removed. It is not the separate Robot Skills starting setup.
+
+The layout contains **9 anchored goals, 4 anchored loaders, and 36 cup placeholders**.
+The four wall-top toggles and tape are drawn as reference markings. Toggle
+mechanisms, scoring, stacking, tipping, vision sensing, and obstacle avoidance
+are not part of this change. Cups are grey/transparent, not alliance coloured.
+For this testing phase, cups/stackers remain visible and available in the palette
+but have no motion or collision response: the robot can pass through them.
+Only goals, loaders, and the perimeter are physical obstacles.
+
+While stopped, drag an element from the palette onto the field, or select a
+palette item and click its destination. Drag existing elements to move them;
+select one to rotate or delete it. Invalid placements (outside the walls or
+overlapping another element, or placing a physical obstacle on the robot) are rejected. Editing is locked while
+running or paused. Editing a preset creates a custom layout.
+
+**Restore preset** puts the game elements back in their preset positions.
+The main **Reset run** button restores the robot to the authored starting
+positions of the current layout, so repeated collision tests use the same setup.
+Field JSON save/load preserves custom starting layouts; model JSON also includes
+the layout. Saved layouts contain authored positions independently of run results.
+
+The unchanged `src/main.py` still targets `(0, 0)`. On Override this is occupied
+by a fixed goal: expect the robot to contact it and eventually report its
+existing no-progress stop instead of reaching the centre. Select **Empty field**
+to reproduce the earlier centre-arrival test. No route planning has been added
+to the robot program.
+
+Official dimensions, coordinates, and simplifications are documented in
+[FIELD_SOURCES.md](FIELD_SOURCES.md). These are 2D rigid footprints; they cannot
+predict whether a raised mechanism can pass over an object. Cup/stacker physics
+will be implemented later.
 
 ## Run without a window
 
@@ -54,13 +92,21 @@ From the project folder:
 
 ```powershell
 python simulate.py --headless --duration 60 --start-x -1000 --start-y -1000 --heading 0 --gps-mode ideal
+python simulate.py --headless --layout override --gps-mode ideal --duration 20
 ```
 
 `--duration` is the maximum simulated time in seconds; arrival or a stopped result can finish the run earlier. Add `--output result.json` to save the JSON result, or use `--help` to see the available options. Repeating the same configuration and seed is intended to make local runs reproducible; changing the model settings changes the result.
 
+Headless mode defaults to an empty field for compatibility with existing tests.
+Use `--layout override` to select the game preset, or `--config saved-model.json`
+to run a saved layout. `--layout` explicitly overrides the layout in a config.
+The Override default start is `(-900, -900)` mm; the empty-field default remains
+`(-1000, -1000)` mm. Override goals and loaders make some previous starting poses
+invalid. The initial robot footprint must be clear of physical obstacles.
+
 ## What this can verify
 
-The model includes finite acceleration, motor torque, wheel traction, wall contact and simulated GPS measurements. It is useful for checking control flow, turning directions, GPS recovery and whether a route reaches its target under the chosen assumptions.
+The model includes finite acceleration, motor torque, wheel traction, wall and element contact, and simulated GPS measurements. It is useful for checking control flow, turning directions, GPS recovery, collision clearance, and whether a route reaches its target under the chosen assumptions.
 
 It has not been validated against this physical robot. Wheel slip, sensor visibility, contact with game objects and other real conditions may behave differently. Reaching the target here does not establish that the robot will follow the same path on the competition field.
 

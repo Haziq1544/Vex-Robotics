@@ -11,6 +11,10 @@ from typing import Any
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from .field_elements import (ELEMENT_SPECS, PRESETS, element_polygon,
+                             make_element, materialize_layout, resolve_elements,
+                             set_preset, validate_layout)
+
 
 BG = "#101721"
 PANEL = "#19232f"
@@ -29,6 +33,16 @@ def enable_dpi_awareness():
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
         except (AttributeError, OSError):
             pass
+
+
+def _usable_screen_size(root):
+    """Keep the initial window inside the desktop work area above the taskbar."""
+    if sys.platform == "win32":
+        from ctypes import wintypes
+        rectangle = wintypes.RECT()
+        if ctypes.windll.user32.SystemParametersInfoW(48, 0, ctypes.byref(rectangle), 0):
+            return rectangle.right - rectangle.left, rectangle.bottom - rectangle.top
+    return root.winfo_screenwidth(), root.winfo_screenheight()
 
 
 def _merge(base, incoming):
@@ -56,6 +70,18 @@ class SimulatorApp:
         self.target = None
         self.trail = []
         self.dragging = False
+        self.selected_element = None
+        self._drag_element = None
+        self._drag_offset = (0.0, 0.0)
+        self._placement_preview = None
+        self._place_kind = None
+        self._palette_press_position = None
+        self._palette_moved = False
+        preset = self.config.get("layout", {}).get("preset", "empty")
+        self._reset_preset = preset if preset != "custom" else "empty"
+        self.layout_choice = tk.StringVar(value=PRESETS[preset])
+        self.selection_text = tk.StringVar(value="No element selected")
+        self._editor_buttons = []
         self._closed = False
         self._poll_token = None
         self._log_history = []
@@ -71,9 +97,10 @@ class SimulatorApp:
         self.readouts = {name: tk.StringVar(value="—") for name in
                          ("position", "heading", "gps", "motors", "motion", "clock", "collision")}
         self.root.title("Flex • VEX V5 autonomous simulator")
-        self.root.geometry("%dx%d" % (min(1360, self.root.winfo_screenwidth() - 60),
-                                      min(900, self.root.winfo_screenheight() - 80)))
-        self.root.minsize(1000, 680)
+        desktop_width, desktop_height = _usable_screen_size(self.root)
+        available_width, available_height = desktop_width - 60, desktop_height - 60
+        self.root.geometry("%dx%d" % (min(1360, available_width), min(900, available_height)))
+        self.root.minsize(min(1000, available_width), min(680, available_height))
         self.root.configure(bg=BG)
         self._style()
         self._build()
@@ -135,7 +162,7 @@ class SimulatorApp:
         self.pause_button = ttk.Button(toolbar, text="Pause", command=self.toggle_pause)
         self.step_button = ttk.Button(toolbar, text="Step", command=self.step)
         self.stop_button = ttk.Button(toolbar, text="Stop", command=self.stop)
-        self.reset_button = ttk.Button(toolbar, text="Reset", command=self.reset)
+        self.reset_button = ttk.Button(toolbar, text="Reset run", command=self.reset)
         for button in (self.run_button, self.pause_button, self.step_button,
                        self.stop_button, self.reset_button):
             button.pack(side="left", padx=(0, 7))
@@ -153,9 +180,13 @@ class SimulatorApp:
         self.canvas.bind("<ButtonPress-1>", self._drag_start)
         self.canvas.bind("<B1-Motion>", self._drag_move)
         self.canvas.bind("<ButtonRelease-1>", self._drag_end)
-        ttk.Label(field_panel, text="Drag robot when stopped  ·  Cyan: physical robot  ·  Green/amber: GPS estimate",
+        self.canvas.bind("<Motion>", self._placement_motion)
+        self.canvas.bind("<Delete>", lambda event: self.delete_selected())
+        self.canvas.bind("<Escape>", lambda event: self._cancel_placement())
+        ttk.Label(field_panel, text="Drag robot or elements when stopped  ·  Cyan: robot  ·  Green/amber: GPS estimate",
                   style="Muted.TLabel", padding=(10, 8)).pack(anchor="w")
         sidebar = ttk.Notebook(content, width=348)
+        self.sidebar = sidebar
         sidebar.grid(row=0, column=1, sticky="nsew")
         control_tab = ttk.Frame(sidebar)
         control_canvas = tk.Canvas(control_tab, bg=PANEL, highlightthickness=0, width=330)
@@ -172,10 +203,28 @@ class SimulatorApp:
                 control_canvas.yview_scroll(-int(event.delta / 120), "units")
         self.root.bind("<MouseWheel>", scroll_controls, add="+")
         brain = ttk.Frame(sidebar, padding=14)
+        editor_tab = ttk.Frame(sidebar)
+        editor_canvas = tk.Canvas(editor_tab, bg=PANEL, highlightthickness=0, width=330)
+        editor_scroll = ttk.Scrollbar(editor_tab, orient="vertical", command=editor_canvas.yview)
+        editor_scroll.pack(side="right", fill="y")
+        editor_canvas.pack(side="left", fill="both", expand=True)
+        editor_canvas.configure(yscrollcommand=editor_scroll.set)
+        editor = ttk.Frame(editor_canvas, padding=14)
+        editor_window = editor_canvas.create_window(0, 0, anchor="nw", window=editor)
+        editor.bind("<Configure>", lambda event: editor_canvas.configure(scrollregion=editor_canvas.bbox("all")))
+        editor_canvas.bind("<Configure>", lambda event: editor_canvas.itemconfigure(editor_window, width=event.width))
+        def scroll_editor(event):
+            if str(event.widget).startswith(str(editor_tab)):
+                editor_canvas.yview_scroll(-int(event.delta / 120), "units")
+        self.root.bind("<MouseWheel>", scroll_editor, add="+")
         sidebar.add(control_tab, text="Controls")
+        sidebar.add(editor_tab, text="Field")
         sidebar.add(brain, text="Brain & console")
         self._build_controls(control)
+        self._build_editor(editor)
         self._build_brain(brain)
+        if self.config.get("layout", {}).get("preset", "empty") != "empty":
+            sidebar.select(editor_tab)
         footer = ttk.Frame(outer, style="Outer.TFrame")
         footer.pack(fill="x", pady=(12, 0))
         ttk.Label(footer, textvariable=self.status, style="Subtitle.TLabel",
@@ -238,6 +287,212 @@ class SimulatorApp:
         ttk.Label(parent, text="Physical dimensions and mass are editable\nestimates. Check Model settings before tuning.",
                   style="Muted.TLabel").pack(anchor="w")
 
+    def _build_editor(self, parent):
+        self._section(parent, "FIELD LAYOUT")
+        self.layout_combo = ttk.Combobox(parent, textvariable=self.layout_choice,
+                                         values=tuple(PRESETS.values()), state="readonly")
+        self.layout_combo.pack(fill="x", pady=(8, 6))
+        self.layout_combo.bind("<<ComboboxSelected>>", self._layout_changed)
+        self.restore_layout_button = ttk.Button(parent, command=self.restore_layout)
+        self.restore_layout_button.pack(fill="x", pady=(0, 8))
+        self._editor_buttons.append(self.restore_layout_button)
+        ttk.Label(parent, text="Override uses your uploaded match layout. Reset run restores your starting "
+                  "positions. Restore layout rebuilds the selected preset.",
+                  style="Muted.TLabel", wraplength=260).pack(anchor="w")
+        self._section(parent, "ADD ELEMENTS", top=18)
+        ttk.Label(parent, text="Drag an item onto the field, or click it and then click the field. Esc cancels placement.",
+                  style="Muted.TLabel", wraplength=260).pack(anchor="w", pady=(5, 8))
+        self.palette = tk.Canvas(parent, width=285, height=36 * len(ELEMENT_SPECS),
+                                 bg=PANEL, highlightthickness=0, cursor="hand2")
+        self.palette.pack(fill="x")
+        for index, (kind, spec) in enumerate(ELEMENT_SPECS.items()):
+            top = index * 36
+            tags = ("palette", "kind:" + kind)
+            self.palette.create_rectangle(0, top + 1, 285, top + 33, fill="#24333f",
+                                          outline="#354653", tags=tags)
+            self.palette.create_oval(10, top + 9, 26, top + 25,
+                                     fill=spec["color"], outline="#bcc9d0", tags=tags)
+            self.palette.create_text(37, top + 17, text=spec["label"], anchor="w",
+                                     fill=TEXT, font=("Segoe UI", 9), tags=tags)
+        self.palette.bind("<ButtonPress-1>", self._palette_press)
+        self.palette.bind("<B1-Motion>", self._palette_motion)
+        self.palette.bind("<ButtonRelease-1>", self._palette_release)
+        self._section(parent, "SELECTED ELEMENT", top=12)
+        ttk.Label(parent, textvariable=self.selection_text, style="Muted.TLabel",
+                  wraplength=260).pack(anchor="w", pady=(5, 8))
+        row = ttk.Frame(parent)
+        row.pack(fill="x")
+        self.rotate_button = ttk.Button(row, text="Rotate 45°", command=self.rotate_selected)
+        self.rotate_button.pack(side="left", expand=True, fill="x", padx=(0, 6))
+        self.delete_button = ttk.Button(row, text="Delete", command=self.delete_selected)
+        self.delete_button.pack(side="left", expand=True, fill="x")
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=(10, 8))
+        for label, command in (("Load layout…", self.load_layout), ("Save layout…", self.save_layout)):
+            button = ttk.Button(row, text=label, command=command)
+            button.pack(side="left", expand=True, fill="x", padx=(0, 5))
+            self._editor_buttons.append(button)
+        ttk.Label(parent, text="Goals and loaders are fixed collision obstacles. Cups/stackers are visual placeholders "
+                  "for later; the robot can pass through them. Red outlines mean contact. Pins are omitted. "
+                  "The centre goal blocks main.py's current target.",
+                  style="Muted.TLabel", wraplength=260).pack(anchor="w")
+
+    def _sync_layout_controls(self):
+        preset = self.config.get("layout", {}).get("preset", "empty")
+        self.layout_choice.set(PRESETS[preset])
+        self.restore_layout_button.configure(text="Restore " + PRESETS[self._reset_preset])
+        self._selection_changed()
+
+    def _selection_changed(self):
+        selected = next((item for item in resolve_elements(self.config)
+                         if item["id"] == self.selected_element), None)
+        if selected is None:
+            self.selected_element = None
+            self.selection_text.set("No element selected")
+        else:
+            self.selection_text.set("%s · %s\nX %.0f, Y %.0f mm · %.0f°" %
+                                   (ELEMENT_SPECS[selected["kind"]]["label"], selected["id"],
+                                    selected["x_mm"], selected["y_mm"], selected["heading_deg"]))
+        state = "normal" if selected is not None and not self._running() else "disabled"
+        self.rotate_button.configure(state=state)
+        self.delete_button.configure(state=state)
+
+    def _clear_run_preview(self):
+        """Return to authored positions before editing or saving a layout."""
+        if self.snapshot is not None and not self._running():
+            try:
+                pose = self._starting_pose()
+            except ValueError as error:
+                self.status.set(str(error))
+                return False
+            if self.session is not None:
+                self.session.stop()
+                self.session = None
+            self._clear_outputs()
+            self.world = pose
+            self._telemetry()
+        return True
+
+    def _validate_editor_config(self, config):
+        validate_layout(config)
+        from .physics import World
+        return World(config, self._starting_pose())
+
+    def _commit_layout(self, candidate, description):
+        if self._running():
+            return False
+        try:
+            self._validate_editor_config(candidate)
+        except (ValueError, TypeError, KeyError) as error:
+            self.status.set("Cannot place layout: " + str(error))
+            return False
+        self._clear_run_preview()
+        self.config = candidate
+        self._sync_layout_controls()
+        self.status.set(description)
+        self.redraw()
+        return True
+
+    def _layout_changed(self, event=None):
+        if self._running():
+            return
+        preset = next(key for key, label in PRESETS.items() if label == self.layout_choice.get())
+        candidate = copy.deepcopy(self.config)
+        if preset == "custom":
+            materialize_layout(candidate)
+        else:
+            set_preset(candidate, preset)
+        if self._commit_layout(candidate, "Layout: " + PRESETS[preset]):
+            if preset != "custom":
+                self._reset_preset = preset
+            self._cancel_placement()
+            self.selected_element = None
+        self._sync_layout_controls()
+
+    def restore_layout(self):
+        if self._running():
+            return
+        candidate = copy.deepcopy(self.config)
+        set_preset(candidate, self._reset_preset)
+        if self._commit_layout(candidate, "Restored " + PRESETS[self._reset_preset]):
+            self._cancel_placement()
+            self.selected_element = None
+            self._selection_changed()
+
+    def _element_candidate(self, element, replacing=None):
+        candidate = copy.deepcopy(self.config)
+        materialize_layout(candidate)
+        elements = candidate["layout"]["elements"]
+        if replacing is not None:
+            elements[:] = [item for item in elements if item["id"] != replacing]
+        elements.append(copy.deepcopy(element))
+        return candidate
+
+    def _place_element(self, kind, x, y):
+        element = make_element(kind, x, y)
+        if self._commit_layout(self._element_candidate(element), "Added " + ELEMENT_SPECS[kind]["label"]):
+            self.selected_element = element["id"]
+            self._selection_changed()
+            self._cancel_placement()
+            return True
+        return False
+
+    def rotate_selected(self):
+        if self._running() or self.selected_element is None:
+            return
+        if not self._clear_run_preview():
+            return
+        element = next(item for item in resolve_elements(self.config) if item["id"] == self.selected_element)
+        rotated = dict(element, heading_deg=(element["heading_deg"] + 45) % 360)
+        self._commit_layout(self._element_candidate(rotated, element["id"]), "Rotated " + element["id"])
+
+    def delete_selected(self):
+        if self._running() or self.selected_element is None:
+            return
+        candidate = copy.deepcopy(self.config)
+        materialize_layout(candidate)
+        candidate["layout"]["elements"] = [item for item in candidate["layout"]["elements"]
+                                             if item["id"] != self.selected_element]
+        if self._commit_layout(candidate, "Deleted " + self.selected_element):
+            self.selected_element = None
+            self._selection_changed()
+
+    def save_layout(self):
+        if self._running():
+            return
+        filename = filedialog.asksaveasfilename(parent=self.root, title="Save starting field layout",
+                                               defaultextension=".json", initialfile="override-layout.json",
+                                               filetypes=[("JSON layout", "*.json")])
+        if filename:
+            try:
+                Path(filename).write_text(json.dumps({"layout": self.config["layout"]}, indent=2) + "\n",
+                                          encoding="utf-8")
+                self.status.set("Saved starting layout: " + Path(filename).name)
+            except OSError as error:
+                self.status.set("Could not save layout: " + str(error))
+
+    def load_layout(self):
+        if self._running():
+            return
+        filename = filedialog.askopenfilename(parent=self.root, title="Load starting field layout",
+                                              filetypes=[("JSON layout", "*.json")])
+        if not filename:
+            return
+        try:
+            incoming = json.loads(Path(filename).read_text(encoding="utf-8"))
+            if not isinstance(incoming, dict) or not isinstance(incoming.get("layout"), dict):
+                raise ValueError("The file must contain a layout object.")
+            candidate = copy.deepcopy(self.config)
+            candidate["layout"] = incoming["layout"]
+            if self._commit_layout(candidate, "Loaded layout: " + Path(filename).name):
+                preset = candidate["layout"]["preset"]
+                self._reset_preset = preset if preset != "custom" else "empty"
+                self.selected_element = None
+                self._cancel_placement()
+                self._sync_layout_controls()
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            self.status.set("Could not load layout: " + str(error))
+
     @staticmethod
     def _section(parent, text, top=0):
         ttk.Label(parent, text=text, style="Section.TLabel").pack(anchor="w", pady=(top, 0))
@@ -270,6 +525,11 @@ class SimulatorApp:
             widget.configure(state="normal" if running else "disabled")
         self.step_button.configure(state="normal" if running and self.paused else "disabled")
         self.pause_button.configure(text="Resume" if self.paused else "Pause")
+        self.layout_combo.configure(state="disabled" if running else "readonly")
+        for button in self._editor_buttons:
+            button.configure(state="disabled" if running else "normal")
+        self.palette.configure(cursor="arrow" if running else "hand2")
+        self._sync_layout_controls()
 
     def _starting_pose(self) -> dict[str, float]:
         values = [float(var.get()) for var in (self.start_x, self.start_y, self.start_heading)]
@@ -286,10 +546,13 @@ class SimulatorApp:
             return
         try:
             pose = self._starting_pose()
+            from .physics import World
+            World(self.config, pose)
         except (ValueError, tk.TclError) as error:
             if not quiet:
                 self.status.set(str(error))
-            return
+            return False
+        self._clear_run_preview()
         self.world = pose
         self.start_heading.set("%.1f" % pose["heading_deg"])
         self.heading_slider.set(pose["heading_deg"])
@@ -297,6 +560,7 @@ class SimulatorApp:
         self.trail = []
         self._telemetry()
         self.redraw()
+        return True
 
     def _heading_changed(self, value):
         if not self._running():
@@ -317,6 +581,7 @@ class SimulatorApp:
                                             start_pose=pose, realtime=True,
                                             speed=float(self.speed.get()), gps_mode=self.gps_mode.get())
             self._clear_outputs()
+            self._cancel_placement()
             self.world = pose
             self.paused = False
             self.session.start()
@@ -328,6 +593,7 @@ class SimulatorApp:
             self.status.set("Could not start: " + str(error))
             self._append_console(str(error))
         self._update_controls()
+        self.redraw()
 
     def toggle_pause(self):
         if self.session is not None and self.session.alive:
@@ -351,8 +617,9 @@ class SimulatorApp:
     def reset(self):
         self.stop()
         self._clear_outputs()
+        self._cancel_placement()
         self.apply_start()
-        self.status.set("Reset — ready to run from the starting position")
+        self.status.set("Reset run — robot and elements restored to their starting positions")
 
     def _clear_outputs(self):
         self.snapshot = None
@@ -510,6 +777,7 @@ class SimulatorApp:
         canvas.create_text(left, top - 23, text="Y (mm) ↑", anchor="w", fill=MUTED, font=("Segoe UI", 10))
         canvas.create_text(right, top - 23, text="%.2f × %.2f m" % (fw / 1000, fh / 1000),
                            anchor="e", fill=MUTED, font=("Segoe UI", 10))
+        self._draw_field_guides()
         if self.target:
             tx, ty = self._point(self.target.get("x_mm", 0), self.target.get("y_mm", 0))
             radius = self.target.get("radius_mm", 100) * scale
@@ -521,6 +789,7 @@ class SimulatorApp:
         if len(self.trail) > 1:
             points = [coordinate for point in self.trail for coordinate in self._point(*point)]
             canvas.create_line(*points, fill="#3b919c", width=2)
+        self._draw_elements(scale)
         self._draw_robot(scale)
         if self.gps:
             gx, gy = self.gps.get("x_mm"), self.gps.get("y_mm")
@@ -531,6 +800,73 @@ class SimulatorApp:
                 canvas.create_line(px - 10, py, px + 10, py, fill=color)
                 canvas.create_line(px, py - 10, px, py + 10, fill=color)
                 canvas.create_text(px + 12, py + 12, text="GPS", anchor="w", fill=color, font=("Segoe UI", 8))
+        if self._placement_preview is not None:
+            element, replacing = self._placement_preview
+            try:
+                self._validate_editor_config(self._element_candidate(element, replacing))
+                color = GREEN
+            except (ValueError, TypeError, KeyError):
+                color = "#ff7777"
+            self._polygon([self._point(x, y) for x, y in element_polygon(element)],
+                          fill=color, stipple="gray50", outline=color, width=2)
+
+    def _draw_field_guides(self):
+        """Tape and perimeter toggles are visual guides, not floor obstacles."""
+        preset = self.config.get("layout", {}).get("preset", "empty")
+        if preset != "override" and not (preset == "custom" and self._reset_preset == "override"):
+            return
+        half_w = self.config["field"]["width_mm"] / 2
+        half_h = self.config["field"]["height_mm"] / 2
+        # The illustrated diagonals connect tile-centre intersections.
+        for points in (((-1196.1, -1196.1), (-299.05, -299.05)),
+                       ((299.05, 299.05), (1196.1, 1196.1)),
+                       ((-1196.1, 1196.1), (-299.05, 299.05)),
+                       ((299.05, -299.05), (1196.1, -1196.1)),
+                       ((-598.1, 0), (0, -598.1), (598.1, 0), (0, 598.1), (-598.1, 0))):
+            self.canvas.create_line(*[coordinate for point in points for coordinate in self._point(*point)],
+                                     fill="#889499", width=2)
+        for side, color in ((-1, "#de6978"), (1, "#4eb7dc")):
+            for end in (-1, 1):
+                points = ((side * (half_w - 260), end * half_h),
+                          (side * (half_w - 260), end * (half_h - 650)),
+                          (side * half_w, end * (half_h - 650)))
+                self.canvas.create_line(*[coordinate for point in points for coordinate in self._point(*point)],
+                                         fill=color, width=2)
+        for vertical in (False, True):
+            for sign in (-1, 1):
+                if vertical:
+                    a, b = self._point(sign * half_w, -330.1), self._point(sign * half_w, 330.1)
+                else:
+                    a, b = self._point(-330.1, sign * half_h), self._point(330.1, sign * half_h)
+                self.canvas.create_line(*a, *b, fill=AMBER, width=5)
+
+    def _draw_elements(self, scale):
+        elements = self.world.get("elements") if self.snapshot is not None else None
+        if elements is None:
+            elements = resolve_elements(self.config)
+        for element in elements:
+            spec = ELEMENT_SPECS[element["kind"]]
+            selected = element["id"] == self.selected_element and not self._running()
+            color = spec["color"]
+            contact = element["id"] in self.world.get("collision_elements", [])
+            outline = CYAN if selected else "#ff7777" if contact else "#b8c2c9"
+            if element["kind"] == "cup" and element.get("face", "clear") == "clear":
+                color = ""
+            self._polygon([self._point(x, y) for x, y in element_polygon(element)],
+                          fill=color, outline=outline, width=3 if selected or contact else 1)
+            x, y = self._point(element["x_mm"], element["y_mm"])
+            half_size = min(spec["width_mm"], spec["depth_mm"]) * scale / 2
+            if element["kind"].startswith("goal") or element["kind"].startswith("cup"):
+                radius = half_size * .60
+                self.canvas.create_oval(x - radius, y - radius, x + radius, y + radius,
+                                         fill=FIELD if element["kind"].startswith("cup") else "#0b1016",
+                                         outline="#b7c3ca", width=1)
+            if element["kind"].startswith("goal"):
+                label = element.get("tag_id", spec.get("tag_id"))
+                if label is None:
+                    label = "C" if element["kind"] == "goal_center" else element["id"].rsplit("_", 1)[-1]
+                self.canvas.create_text(x, y, text=str(label)[:4], fill=TEXT,
+                                         font=("Segoe UI", max(7, min(10, int(half_size)))))
 
     def _draw_robot(self, scale):
         robot = self.config["robot"]
@@ -571,14 +907,41 @@ class SimulatorApp:
     def _drag_start(self, event):
         if self._running() or not self._transform:
             return
+        if not self._clear_run_preview():
+            return
+        self.canvas.focus_set()
+        if self._place_kind is not None:
+            x, y = self._field_coordinates(event.x, event.y)
+            self._place_element(self._place_kind, x, y)
+            return
+        x, y = self._field_coordinates(event.x, event.y)
+        for element in reversed(resolve_elements(self.config)):
+            if self._inside_polygon(x, y, element_polygon(element)):
+                self.selected_element = element["id"]
+                self._drag_element = copy.deepcopy(element)
+                self._drag_offset = (x - element["x_mm"], y - element["y_mm"])
+                self._selection_changed()
+                self.redraw()
+                return
+        self.selected_element = None
+        self._selection_changed()
         x, y = self._point(self.world.get("x_mm", 0), self.world.get("y_mm", 0))
         radius = max(self.config["robot"]["body_width_mm"], self.config["robot"]["body_length_mm"]) * self._transform[2] / 2 + 15
         if math.hypot(event.x - x, event.y - y) <= radius:
             self.dragging = True
-            self._drag_move(event)
+        self.redraw()
 
     def _drag_move(self, event):
-        if not self.dragging or self._running() or not self._transform:
+        if self._running() or not self._transform:
+            return
+        if self._drag_element is not None:
+            x, y = self._field_coordinates(event.x, event.y)
+            self._drag_element["x_mm"] = x - self._drag_offset[0]
+            self._drag_element["y_mm"] = y - self._drag_offset[1]
+            self._placement_preview = (self._drag_element, self._drag_element["id"])
+            self.redraw()
+            return
+        if not self.dragging:
             return
         cx, cy, scale = self._transform
         robot = self.config["robot"]
@@ -587,10 +950,95 @@ class SimulatorApp:
         ymax = max(0, self.config["field"]["height_mm"] / 2 - margin)
         self.start_x.set("%.0f" % max(-xmax, min(xmax, (event.x - cx) / scale)))
         self.start_y.set("%.0f" % max(-ymax, min(ymax, (cy - event.y) / scale)))
-        self.apply_start(quiet=True)
+        if not self.apply_start():
+            self.start_x.set("%.0f" % self.world["x_mm"])
+            self.start_y.set("%.0f" % self.world["y_mm"])
 
     def _drag_end(self, event):
         self.dragging = False
+        if self._drag_element is not None and not self._running():
+            element = self._drag_element
+            moved = self._placement_preview is not None
+            self._drag_element = None
+            self._placement_preview = None
+            if moved:
+                self._commit_layout(self._element_candidate(element, element["id"]), "Moved " + element["id"])
+        self.redraw()
+
+    def _field_coordinates(self, px, py):
+        assert self._transform is not None
+        cx, cy, scale = self._transform
+        return (px - cx) / scale, (cy - py) / scale
+
+    @staticmethod
+    def _inside_polygon(x, y, points):
+        signs = []
+        for index, a in enumerate(points):
+            b = points[(index + 1) % len(points)]
+            cross = (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0])
+            if abs(cross) > 1e-7:
+                signs.append(cross > 0)
+        return not signs or all(sign == signs[0] for sign in signs)
+
+    def _palette_press(self, event):
+        if self._running() or not self._clear_run_preview():
+            return
+        hits = self.palette.find_overlapping(event.x, event.y, event.x, event.y)
+        kind = next((tag[5:] for item in hits for tag in self.palette.gettags(item)
+                     if tag.startswith("kind:")), None)
+        if kind is None:
+            return
+        self._place_kind = kind
+        self._palette_press_position = (event.x_root, event.y_root)
+        self._palette_moved = False
+        self._placement_preview = None
+        self.status.set("Place " + ELEMENT_SPECS[kind]["label"] + ": drag onto the field or click a free position")
+        self.canvas.focus_set()
+        self.redraw()
+
+    def _palette_motion(self, event):
+        if self._place_kind is None or self._running():
+            return
+        if self._palette_press_position is not None:
+            self._palette_moved = self._palette_moved or math.hypot(
+                event.x_root - self._palette_press_position[0], event.y_root - self._palette_press_position[1]) > 5
+        px = event.x_root - self.canvas.winfo_rootx()
+        py = event.y_root - self.canvas.winfo_rooty()
+        self._preview_placement(px, py)
+
+    def _palette_release(self, event):
+        if self._place_kind is None or self._running():
+            return
+        if self._palette_moved:
+            px = event.x_root - self.canvas.winfo_rootx()
+            py = event.y_root - self.canvas.winfo_rooty()
+            if 0 <= px <= self.canvas.winfo_width() and 0 <= py <= self.canvas.winfo_height():
+                x, y = self._field_coordinates(px, py)
+                self._place_element(self._place_kind, x, y)
+            else:
+                self.status.set("Drop onto the field, or click a free field position")
+        self._palette_press_position = None
+        self._placement_preview = None
+        self.redraw()
+
+    def _preview_placement(self, px, py):
+        self._placement_preview = None
+        if self._place_kind is not None and self._transform:
+            if 0 <= px <= self.canvas.winfo_width() and 0 <= py <= self.canvas.winfo_height():
+                x, y = self._field_coordinates(px, py)
+                self._placement_preview = (make_element(self._place_kind, x, y), None)
+        self.redraw()
+
+    def _placement_motion(self, event):
+        if self._place_kind is not None and not self._running():
+            self._preview_placement(event.x, event.y)
+
+    def _cancel_placement(self):
+        self._place_kind = None
+        self._placement_preview = None
+        self._drag_element = None
+        self.dragging = False
+        self.redraw()
 
     def open_settings(self):
         if not self._running():
@@ -758,10 +1206,16 @@ class ModelSettings:
     def apply(self):
         try:
             config = self._read()
+            self.app._validate_editor_config(config)
         except ValueError as error:
             self.note.set(str(error))
             return
         self.app.config = config
+        preset = config.get("layout", {}).get("preset", "empty")
+        if preset != "custom":
+            self.app._reset_preset = preset
+        self.app.selected_element = None
+        self.app._sync_layout_controls()
         self.app.reset()
         self.app.status.set("Model updated — ready to run")
         self.window.destroy()

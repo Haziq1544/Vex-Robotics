@@ -10,6 +10,8 @@ from copy import deepcopy
 import math
 
 from .config import validate_config
+from .collisions import Body, broadphase_pairs, contain_body, polygon_contact, resolve_contact
+from .field_elements import element_polygon, element_spec, resolve_elements
 
 
 def clamp(value, low, high):
@@ -37,6 +39,7 @@ class World:
         self.hold_distance = [0.0, 0.0]
         self.collision = False
         self.collision_count = 0
+        self.collision_elements = set()
         self.radius = self.robot["wheel_diameter_mm"] / 2000.0
         self.track = self.robot["track_width_mm"] / 1000.0
         self.mass = self.robot["mass_kg"]
@@ -44,6 +47,21 @@ class World:
                                     (self.robot["body_width_mm"] / 1000) ** 2) / 12 * self.physics["inertia_scale"]
         self.free_speed = self.robot["motor_free_rpm"] * 2 * math.pi / 60 * self.radius / self.robot["external_ratio"]
         self.stall_force = self.robot["motor_stall_torque_nm"] * self.robot["external_ratio"] / self.radius
+        self.elements = resolve_elements(self.config)
+        self._element_bodies = []
+        for element in self.elements:
+            spec = element_spec(element["kind"])
+            if not spec["collidable"]:
+                continue  # Cups/stackers stay visible but have no physics yet.
+            centered = dict(element, x_mm=0.0, y_mm=0.0, heading_deg=0.0)
+            local = element_polygon(centered)
+            self._element_bodies.append(Body(local, element["x_mm"], element["y_mm"],
+                                            element["heading_deg"], 0, 0, element=element))
+        half_w, half_l = self.robot["body_width_mm"] / 2, self.robot["body_length_mm"] / 2
+        self._robot_body = Body([(-half_w, half_l), (half_w, half_l),
+                                 (half_w, -half_l), (-half_w, -half_l)],
+                                self.x_mm, self.y_mm, self.heading_deg, 1 / self.mass, 1 / self.inertia)
+        self._contact_bodies = [self._robot_body] + self._element_bodies
         self._fit_start()
 
     def _fit_start(self):
@@ -51,6 +69,9 @@ class World:
         half_h = self.config["field"]["height_mm"] / 2
         if any(abs(x) > half_w + 1e-6 or abs(y) > half_h + 1e-6 for x, y in self.robot_corners()):
             raise ValueError("The complete robot must start inside the field walls")
+        for body in self._element_bodies:
+            if polygon_contact(self.robot_corners(), body.polygon) is not None:
+                raise ValueError("Robot start overlaps game element " + str(body.element["id"]))
 
     def set_motor(self, port, command):
         """Accept physical shaft percent; mounting sign converts it to wheel motion."""
@@ -90,9 +111,17 @@ class World:
                            (1 / p["wheel_effective_mass_kg"] + 2 / self.mass + self.track ** 2 / (2 * self.inertia)))
         step = min(self.config["simulation"]["step_ms"] / 1000, stable_dt,
                    p["motor_response_s"] / 8, p["brake_response_s"] / 8)
+        if self._element_bodies:
+            # Limit travel of every vertex, including during fast rotation. The
+            # normal drivetrain is already safely below this 8 mm sweep bound.
+            robot_radius = math.hypot(self.robot["body_width_mm"], self.robot["body_length_mm"]) / 2000
+            sweep_speed = max(2 * self.free_speed + 2 * self.free_speed / self.track * robot_radius,
+                              math.hypot(self.vx, self.vy) + abs(self.omega) * robot_radius)
+            step = min(step, 0.008 / max(sweep_speed, 1e-6))
         count = max(1, math.ceil(dt / step))
         interval = dt / count
         self.collision = False
+        self.collision_elements.clear()
         for _ in range(count):
             self._integrate(interval)
         self.time_s += dt
@@ -148,6 +177,47 @@ class World:
         self.y_mm += self.vy * dt * 1000
         self.heading_deg = (self.heading_deg + math.degrees(self.omega * dt)) % 360
         self._wall_contacts()
+        if self._element_bodies:
+            self._element_contacts()
+
+    def _record_element_collision(self, element_id=None):
+        if not self.collision:
+            self.collision_count += 1
+        self.collision = True
+        if element_id is not None:
+            self.collision_elements.add(element_id)
+
+    def _element_contacts(self):
+        """Resolve the robot against fixed goal/loader footprints and walls."""
+        robot = self._robot_body
+        robot.x_mm, robot.y_mm, robot.heading_deg = self.x_mm, self.y_mm, self.heading_deg
+        robot.vx, robot.vy, robot.omega = self.vx, self.vy, self.omega
+        bodies = self._contact_bodies
+        half_w, half_h = self.config["field"]["width_mm"] / 2, self.config["field"]["height_mm"] / 2
+        restitution = self.physics["restitution"]
+        # Iterate so resolving one obstacle cannot leave the robot in a wall
+        # or another obstacle. Every field body has zero inverse mass.
+        for _ in range(24):
+            resolved = False
+            for a, b in broadphase_pairs(bodies):
+                contact = polygon_contact(a.polygon, b.polygon)
+                if contact is None:
+                    continue
+                if a is robot:
+                    self._record_element_collision(b.element["id"])
+                elif b is robot:
+                    self._record_element_collision(a.element["id"])
+                resolve_contact(a, b, contact, restitution)
+                # Sub-micron contacts still receive impulses, but need no
+                # further expensive projection pass at this substep.
+                resolved |= contact[0] > 0.001
+            if contain_body(robot, half_w, half_h, restitution):
+                resolved = True
+                self._record_element_collision()
+            if not resolved:
+                break
+        self.x_mm, self.y_mm, self.heading_deg = robot.x_mm, robot.y_mm, robot.heading_deg
+        self.vx, self.vy, self.omega = robot.vx, robot.vy, robot.omega
 
     def _wall_contacts(self):
         half_w = self.config["field"]["width_mm"] / 2
@@ -198,6 +268,8 @@ class World:
             "v_mm_s": (self.vx * math.sin(angle) + self.vy * math.cos(angle)) * 1000,
             "omega_deg_s": math.degrees(self.omega), "collision": self.collision,
             "collision_count": self.collision_count,
+            "collision_elements": sorted(self.collision_elements),
+            "elements": deepcopy(self.elements),
         }
         for index, side in enumerate(("left", "right")):
             result[side + "_rpm"] = self.wheel_speed[index] * shaft_per_meter * 60 * signs[index]

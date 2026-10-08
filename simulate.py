@@ -6,6 +6,7 @@ from pathlib import Path
 import time
 
 from simulator.config import load_config
+from simulator.field_elements import PRESETS, set_preset
 from simulator.runtime import SimulatorSession
 
 
@@ -42,6 +43,7 @@ def run_headless(config, program, pose, duration=60, gps_mode="ideal"):
     if end is None:
         end = {"reason": "error", "error": "Simulator process exited without a result"}
     return {"result": end, "snapshot": latest, "gps_mode": gps_mode,
+            "layout": config.get("layout", {"preset": "empty", "elements": []}),
             "seed": config["simulation"]["seed"]}
 
 
@@ -49,10 +51,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--program", type=Path, default=ROOT / "src" / "main.py")
     parser.add_argument("--config", type=Path, help="JSON model settings or partial overrides")
+    parser.add_argument("--layout", choices=[name for name in PRESETS if name != "custom"],
+                        help="Field preset; GUI defaults to Override, headless to empty unless loading a config")
     parser.add_argument("--headless", action="store_true", help="Run without a window and print a JSON result")
     parser.add_argument("--duration", type=float, default=60, help="Maximum headless simulation seconds")
-    parser.add_argument("--start-x", type=float, default=-1000, help="Starting X in mm")
-    parser.add_argument("--start-y", type=float, default=-1000, help="Starting Y in mm")
+    parser.add_argument("--start-x", type=float, help="Starting X in mm")
+    parser.add_argument("--start-y", type=float, help="Starting Y in mm")
     parser.add_argument("--heading", type=float, default=0, help="Clockwise heading; 0 faces +Y")
     parser.add_argument("--gps-mode", choices=("ideal", "realistic"), default="realistic")
     parser.add_argument("--speed", type=float, default=1, help="GUI playback speed")
@@ -63,6 +67,13 @@ def main():
         parser.error("Duration and speed must be finite and positive")
     try:
         config = load_config(args.config)
+        if args.layout:
+            set_preset(config, args.layout)
+        elif args.config is None and not args.headless:
+            set_preset(config, "override")
+        default_start = -900 if config["layout"]["preset"] == "override" else -1000
+        args.start_x = default_start if args.start_x is None else args.start_x
+        args.start_y = default_start if args.start_y is None else args.start_y
         if not args.program.is_file():
             raise ValueError("Program file not found: " + str(args.program))
         pose = {"x_mm": args.start_x, "y_mm": args.start_y, "heading_deg": args.heading}

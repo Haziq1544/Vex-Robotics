@@ -62,7 +62,7 @@ def validate_config(config):
     }
     defaults = default_config()
     for section, values in defaults.items():
-        if section == "notes":
+        if section in ("notes", "layout"):
             continue
         if section not in config or not isinstance(config[section], dict):
             raise ValueError("Missing configuration section: " + section)
@@ -97,4 +97,6 @@ def validate_config(config):
         raise ValueError("simulation.step_ms must be at most 10 for stable integration")
     if int(config["simulation"]["seed"]) != config["simulation"]["seed"]:
         raise ValueError("simulation.seed must be an integer")
+    from .field_elements import validate_layout
+    validate_layout(config)
     return config
