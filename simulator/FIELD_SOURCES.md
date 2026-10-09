@@ -119,5 +119,6 @@ Measured dimensions and placement do not make contact dynamics exact. The
 robot remains an estimated fixed rectangular footprint; robot contact response
 needs physical calibration. A 2D test can verify overlap
 handling and navigation clearance, but cannot establish real-world tipping,
-mechanism contact, sensor visibility, or competition performance. No vision
-sensor or AprilTag detection is added by the field preset.
+mechanism contact, sensor visibility, or competition performance. The separate
+[AI Vision model](VISION_SOURCES.md) adds geometric AprilTag observations when
+the vision test is selected; loading a field preset alone does not enable it.

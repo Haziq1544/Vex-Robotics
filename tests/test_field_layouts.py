@@ -15,7 +15,7 @@ from simulator.field_elements import (
 )
 
 
-PROGRAM = Path(__file__).resolve().parents[1] / "src" / "main.py"
+PROGRAM = Path(__file__).resolve().parents[1] / "examples" / "gps_centre_test.py"
 
 
 class OverrideLayoutTests(unittest.TestCase):

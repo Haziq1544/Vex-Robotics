@@ -58,7 +58,7 @@ class Sim:
             "wait": self.wait, "math": math, "print": lambda *args: None,
         }
         # Load declarations and real functions without executing the robot startup.
-        source = Path(__file__).resolve().parents[1] / "src" / "main.py"
+        source = Path(__file__).resolve().parents[1] / "examples" / "gps_centre_test.py"
         tree = ast.parse(source.read_text())
         tree.body = [node for node in tree.body
                      if isinstance(node, (ast.Assign, ast.FunctionDef))

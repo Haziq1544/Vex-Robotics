@@ -52,6 +52,8 @@ def validate_config(config):
                     "wheel_effective_mass_kg", "tire_stiffness_n_per_m_s",
                     "inertia_scale"),
         "gps": ("sample_hz",),
+        "vision": ("height_mm", "horizontal_fov_deg", "vertical_fov_deg", "tag_size_mm",
+                   "sample_hz", "near_mm", "far_mm", "minimum_tag_pixels", "max_tag_angle_deg"),
         "simulation": ("step_ms",),
     }
     nonnegative = {
@@ -59,6 +61,7 @@ def validate_config(config):
                     "lateral_damping_per_s", "yaw_drag_nm_per_rad_s", "restitution"),
         "gps": ("latency_ms", "position_noise_mm", "heading_noise_deg",
                 "turn_dropout_deg_s", "wall_min_distance_mm"),
+        "vision": ("latency_ms",),
     }
     defaults = default_config()
     for section, values in defaults.items():
@@ -97,6 +100,13 @@ def validate_config(config):
         raise ValueError("simulation.step_ms must be at most 10 for stable integration")
     if int(config["simulation"]["seed"]) != config["simulation"]["seed"]:
         raise ValueError("simulation.seed must be an integer")
+    vision = config["vision"]
+    if any(vision[k] >= 179 for k in ("horizontal_fov_deg", "vertical_fov_deg")):
+        raise ValueError("Vision fields of view must be less than 179 degrees")
+    if vision["max_tag_angle_deg"] >= 90 or abs(vision["pitch_deg"]) >= 90:
+        raise ValueError("Vision pitch and maximum tag angle must be below 90 degrees")
+    if vision["near_mm"] >= vision["far_mm"]:
+        raise ValueError("vision.near_mm must be less than vision.far_mm")
     from .field_elements import validate_layout
     validate_layout(config)
     return config

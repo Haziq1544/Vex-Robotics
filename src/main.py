@@ -1,300 +1,392 @@
-# Ontario Skills: GPS-only drive-to-centre test.
-# Press Run to calibrate GPS and automatically drive to centre once.
+"""VEXcode Python: approach the first visible goal, with no fixed field target.
+
+Set AI_VISION_PORT to the connected Ports.PORTx before hardware use. Simulator
+support is detected explicitly; no real port number is guessed. Measure camera
+mount, chassis size and tag size before relying on physical stopping distances.
+If no goal is initially visible, GPS guides one clockwise search sweep in place.
+The first returned goal tag is locked. Loss/ambiguity after acquisition stops
+the test rather than switching targets. Repeated IDs cannot uniquely name
+physical goals, so this is a continuous visual track, not global identification.
+"""
 from vex import *
 import math
 
-brain = Brain()
+PROGRAM_KIND = "ai_vision_first_goal"
+AI_VISION_PORT = None
+# User-approved steering and chassis-to-goal stopping gap.
+APPROACH_MODE = "steer"  # "steer" or "straight"
+STOP_CLEARANCE_MM = 50.0
 
-# Green cartridge, external motor-to-wheel gearing 1:1.
-DRIVE_CARTRIDGE = GearSetting.RATIO_18_1
-# Verify these directions with the wheels lifted before the first driving test.
-LEFT_REVERSED = False
-RIGHT_REVERSED = True
-left_motor = Motor(Ports.PORT9, DRIVE_CARTRIDGE, LEFT_REVERSED)
-right_motor = Motor(Ports.PORT10, DRIVE_CARTRIDGE, RIGHT_REVERSED)
+# Editable estimates from Flex sensor build pp22-25, lift held in pictured pose.
+CAMERA_X_MM = 0.0
+CAMERA_Y_MM = 140.0
+CAMERA_HEIGHT_MM = 180.0
+CAMERA_YAW_DEG = 0.0
+CAMERA_PITCH_DEG = 0.0
+# The official goal drawing does not dimension the printed detection square.
+TAG_SIZE_MM = 25.0  # provisional; measure the detected tag square on the robot field
+HORIZONTAL_FOV_DEG = 74.0
+VERTICAL_FOV_DEG = 63.0
+ROBOT_WIDTH_MM = 400.0
+ROBOT_LENGTH_MM = 430.0
+MAX_DRIVE_PERCENT = 15.0
+MAX_TURN_PERCENT = 12.0
+GOAL_TAG_IDS = (0, 1, 2, 3, 4)
 
-# Flex sensor build, pages 2-7: GPS is centred on the rear uprights and
-# faces backward. Robot forward is toward the claw.
-# Offsets are relative to the turning centre: right +X, forward +Y.
-GPS_X_OFFSET_MM = 0
-# The PDF gives no fore-aft dimension. Retain the existing 2.1-inch estimate;
-# verify the horizontal distance from the turning centre to the GPS centre.
+# Existing rear-facing GPS on port 18; offsets relative to the turning centre.
+GPS_X_OFFSET_MM = 0.0
 GPS_Y_OFFSET_MM = -53.34
-GPS_HEADING_OFFSET_DEG = 180  # Rear-facing GPS; report the robot's forward heading.
-GPS_MOUNT_CONFIGURED = True
-gps = Gps(Ports.PORT18, GPS_X_OFFSET_MM, GPS_Y_OFFSET_MM,
-          MM, GPS_HEADING_OFFSET_DEG)
+GPS_HEADING_OFFSET_DEG = 180.0
+CAMERA_STARTUP_GRACE_MS = 150
+SEARCH_TURN_PERCENT = 8.0
+SEARCH_TIMEOUT_MS = 25000
+SEARCH_GPS_CALIBRATION_MS = 10000
+SEARCH_GPS_RECOVERY_MS = 2000
+SEARCH_GPS_LOCK_MS = 200
+SEARCH_NO_PROGRESS_MS = 2000
+SEARCH_DRIFT_LIMIT_MM = 75.0
+SEARCH_WALL_MARGIN_MM = 20.0
+# Physical field bounds for the turn-clearance check, not a goal destination.
+FIELD_HALF_WIDTH_MM = 1784.35
+FIELD_HALF_HEIGHT_MM = 1784.35
+APPROACH_TIMEOUT_MS = 30000
 
-# Standard GPS field coordinates put the arena centre at (0, 0).
-TARGET_X_MM = 0
-TARGET_Y_MM = 0
-ARRIVAL_RADIUS_MM = 100
-ARRIVAL_SETTLE_MS = 500
-MIN_GPS_QUALITY = 100  # Require position calculated from the field-code strips.
-GPS_LOCK_MS = 500
-GPS_LOCK_TIMEOUT_MS = 5000
-GPS_RECOVERY_TIMEOUT_MS = 2000  # Brake and allow a brief loss of optical lock.
-FIELD_LIMIT_MM = 2000  # Reject readings outside the standard 12-foot field.
-CONTROL_INTERVAL_MS = 20  # Nominal 50 Hz polling; sensor freshness is hardware-dependent.
-DISPLAY_INTERVAL_MS = 20  # Target 50 screen updates/second, allowing margin over 30.
-RUN_TIMEOUT_MS = 45000
-PROGRESS_TIMEOUT_MS = 3000
-DRIVE_PROGRESS_MM = 20
-TURN_PROGRESS_DEG = 3
-MAX_DRIVE_PERCENT = 50
-MIN_DRIVE_PERCENT = 8
-MAX_TURN_PERCENT = 20  # Slower initial setting to reduce GPS loss during turns.
-MIN_TURN_PERCENT = 6
-DISTANCE_GAIN = 0.04
-TURN_GAIN = 0.35
-STEERING_GAIN = 0.3
-TURN_FINISH_DEG = 6
-TURN_RESTART_DEG = 20
-
-gps_status = "Not calibrated"
-run_status = "Starting GPS calibration"
-distance_to_target = None
-heading_error = None
+run_status = "Vision test ready"
+vision_target_id = None
+vision_clearance_mm = None
+vision_bearing_deg = None
+search_swept_deg = 0.0
+search_phase = "Not needed"
 
 
-def stop_drive():
-    """Brake both drive motors."""
-    left_motor.stop(BRAKE)
-    right_motor.stop(BRAKE)
+def _distance(dx, dy):
+    # VEX MicroPython's math subset does not provide math.hypot.
+    return math.sqrt(dx * dx + dy * dy)
 
 
-def screen_line(row, message):
-    """Replace one line on the Brain display."""
-    brain.screen.set_cursor(row, 1)
-    brain.screen.clear_line()
-    brain.screen.print(message)
+class GpsGoalSearch:
+    """Measure one in-place sweep using GPS; goal positions are not assumed."""
+    def __init__(self, gps):
+        self.gps = gps
+        self.started_ms = None
+        self.origin = None
+        self.previous_heading = None
+        self.swept_deg = 0.0
+        self.best_sweep = 0.0
+        self.progress_ms = 0
+        self.good_since = None
+        self.bad_since = None
+
+    def update(self, now_ms):
+        """Return clockwise motor percentage and status; zero means brake."""
+        if not self.gps.installed():
+            return 0, "Stopped: GPS unavailable for search"
+        if self.started_ms is None:
+            self.started_ms = now_ms
+            self.gps.calibrate()
+        if self.gps.is_calibrating():
+            if now_ms - self.started_ms >= SEARCH_GPS_CALIBRATION_MS:
+                return 0, "Stopped: GPS calibration timed out"
+            return 0, "Calibrating GPS for search"
+        if now_ms - self.started_ms >= SEARCH_TIMEOUT_MS:
+            return 0, "Stopped: goal search timed out"
+
+        x, y = self.gps.x_position(MM), self.gps.y_position(MM)
+        heading = self.gps.heading(DEGREES)
+        valid = (self.gps.quality() >= 100 and -2000 <= x <= 2000 and
+                 -2000 <= y <= 2000 and 0 <= heading < 360)
+        if not valid:
+            self.good_since = None
+            if self.bad_since is None:
+                self.bad_since = now_ms
+            if now_ms - self.bad_since >= SEARCH_GPS_RECOVERY_MS:
+                return 0, "Stopped: GPS recovery timed out"
+            return 0, "GPS lost: search paused"
+
+        # Account for the full rectangle's swept radius, including corner swing.
+        radius = _distance(ROBOT_WIDTH_MM / 2, ROBOT_LENGTH_MM / 2) + SEARCH_WALL_MARGIN_MM
+        if abs(x) + radius >= FIELD_HALF_WIDTH_MM or abs(y) + radius >= FIELD_HALF_HEIGHT_MM:
+            return 0, "Stopped: too close to wall to search"
+        if self.origin is None:
+            self.origin = (x, y)
+            self.previous_heading = heading
+            self.progress_ms = now_ms
+        elif _distance(x - self.origin[0], y - self.origin[1]) > SEARCH_DRIFT_LIMIT_MM:
+            return 0, "Stopped: robot moved during search"
+        if self.previous_heading is not None:
+            delta = (heading - self.previous_heading + 180) % 360 - 180
+            if abs(delta) > 30:
+                return 0, "Stopped: GPS heading jumped"
+            # Signed accumulation handles 359->0 and does not count jitter twice.
+            self.swept_deg += delta
+            self.previous_heading = heading
+        if self.swept_deg >= 360:
+            return 0, "Stopped: no goal found after full scan"
+
+        if self.good_since is None:
+            self.good_since = now_ms
+        if now_ms - self.good_since < SEARCH_GPS_LOCK_MS:
+            if self.bad_since is not None and now_ms - self.bad_since >= SEARCH_GPS_RECOVERY_MS:
+                return 0, "Stopped: GPS recovery timed out"
+            self.progress_ms = now_ms
+            return 0, "Waiting for GPS search lock"
+        self.bad_since = None
+        if self.swept_deg > self.best_sweep + 3:
+            self.best_sweep = self.swept_deg
+            self.progress_ms = now_ms
+        elif now_ms - self.progress_ms >= SEARCH_NO_PROGRESS_MS:
+            return 0, "Stopped: search turn stalled"
+        return SEARCH_TURN_PERCENT, "Searching for first goal"
 
 
-def gps_display():
-    """Show GPS readings and the current test result without controlling motors."""
-    fps_started = brain.timer.time(MSEC)
-    frames = 0
-    display_fps = 0
-    while True:
-        frame_started = brain.timer.time(MSEC)
-        screen_line(1, "GPS centre test: (0, 0)")
-        screen_line(2, run_status)
-        if not gps.installed():
-            screen_line(3, "GPS missing: check port 18")
-            screen_line(4, "")
-            screen_line(5, "")
-        elif gps_status != "Ready":
-            screen_line(3, gps_status)
-            screen_line(4, "")
-            screen_line(5, "")
-        else:
-            screen_line(3, "GPS quality: %d%%" % gps.quality())
-            screen_line(4, "X: %.0f Y: %.0f mm" %
-                        (gps.x_position(MM), gps.y_position(MM)))
-            screen_line(5, "Heading: %.1f deg" % gps.heading())
-        screen_line(6, "Distance: %.0f mm" % distance_to_target
-                    if distance_to_target is not None else "Distance: --")
-        screen_line(7, "Turn error: %.1f deg" % heading_error
-                    if heading_error is not None else "Turn error: --")
-        screen_line(8, "Display: %.0f FPS" % display_fps)
-        frames += 1
-        elapsed = brain.timer.time(MSEC) - fps_started
-        if elapsed >= 1000:
-            display_fps = frames * 1000 / elapsed
-            frames = 0
-            fps_started = brain.timer.time(MSEC)
-        # Account for drawing time instead of adding a full delay after drawing.
-        remaining = DISPLAY_INTERVAL_MS - (brain.timer.time(MSEC) - frame_started)
-        wait(max(1, remaining), MSEC)
+def observed_goal(tag):
+    # Fit the four pixel rays to the known, upright goal panel. Constraining
+    # height/tilt avoids an unconstrained 6D pose becoming unstable on tiny tags.
+    # This uses goal dimensions and tag ID, never a map or simulated position.
+    tag_height = {0: 178.0, 1: 101.8, 4: 101.8, 2: 37.8, 3: 37.8}[tag.id]
+    fx = 160 / math.tan(math.radians(HORIZONTAL_FOV_DEG) / 2)
+    fy = 120 / math.tan(math.radians(VERTICAL_FOV_DEG) / 2)
+    pitch = math.radians(CAMERA_PITCH_DEG)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    z = tag_height - CAMERA_HEIGHT_MM
+    tilt = math.atan((71.25 - 44.4) / (82.5 - 10))
+    pixels = list(zip(tag.tag.x, tag.tag.y))
+    if len(pixels) != 4:
+        raise ValueError("Four tag corners are required")
+    signed_area = sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(pixels, pixels[1:] + pixels[:1]))
+    if abs(signed_area) < 1:
+        raise ValueError("Degenerate tag corners")
+    # Firmware corner start/winding is not assumed. The fit tries each start;
+    # normalize winding to the visible panel projection before fitting.
+    if signed_area > 0:
+        pixels.reverse()
+    best = None
+    for angle_deg in range(0, 360, 4):
+        angle = math.radians(angle_deg)
+        nx, ny = math.sin(angle), math.cos(angle)
+        offsets = [(TAG_SIZE_MM / 2 * (sx * ny - sy * nx * math.sin(tilt)),
+                    TAG_SIZE_MM / 2 * (-sx * nx - sy * ny * math.sin(tilt)),
+                    TAG_SIZE_MM / 2 * sy * math.cos(tilt))
+                   for sx, sy in ((-1, 1), (1, 1), (1, -1), (-1, -1))]
+        for shift in range(4):
+            paired = pixels[shift:] + pixels[:shift]
+            a11 = a12 = a22 = b1 = b2 = 0.0
+            for (px, py), (dx, dy, dz) in zip(paired, offsets):
+                u, v = (px - 160) / fx, (120 - py) / fy
+                for aa, bb, rhs in ((fx, -u * cp * fx, (u * (cp * dy + sp * (z + dz)) - dx) * fx),
+                                    (0, (-sp - v * cp) * fy,
+                                     (v * (cp * dy + sp * (z + dz)) - cp * (z + dz) + sp * dy) * fy)):
+                    a11 += aa * aa
+                    a12 += aa * bb
+                    a22 += bb * bb
+                    b1 += aa * rhs
+                    b2 += bb * rhs
+            determinant = a11 * a22 - a12 * a12
+            if abs(determinant) < 1e-8:
+                continue
+            x = (b1 * a22 - b2 * a12) / determinant
+            y = (b2 * a11 - b1 * a12) / determinant
+            if y < 30 or y > 5000 or nx * x + ny * y >= 0:
+                continue
+            error = 0.0
+            for (px, py), (dx, dy, dz) in zip(paired, offsets):
+                depth = cp * (y + dy) + sp * (z + dz)
+                if depth <= 1:
+                    error = float("inf")
+                    break
+                ex = 160 + fx * (x + dx) / depth
+                ey = 120 - fy * (cp * (z + dz) - sp * (y + dy)) / depth
+                error += (ex - px) ** 2 + (ey - py) ** 2
+            if best is None or error < best[0]:
+                best = (error, x, y, nx, ny)
+    if best is None or best[0] > 16:
+        raise ValueError("Goal tag geometry does not match calibration")
+    _, x, y, nx, ny = best
+    yaw = math.radians(CAMERA_YAW_DEG)
+    tag_x, tag_y = x * math.cos(yaw) + y * math.sin(yaw), -x * math.sin(yaw) + y * math.cos(yaw)
+    nx, ny = nx * math.cos(yaw) + ny * math.sin(yaw), -nx * math.sin(yaw) + ny * math.cos(yaw)
+    # Goal top/base dimensions from official GoalSpecs; tag centre z37.8
+    # above the base of its common upper part. Neutral pedestal doesn't change XY.
+    face_offset = 71.25 - (37.8 - 10) * (71.25 - 44.4) / (82.5 - 10)
+    gx, gy = tag_x + CAMERA_X_MM - face_offset * nx, tag_y + CAMERA_Y_MM - face_offset * ny
+    # Conservative octagonal envelope of the goal's rounded corners.
+    a, b = 71.25, math.sqrt(2) * 81.9 - 71.25
+    local = ((a, b), (b, a), (-b, a), (-a, b), (-a, -b), (-b, -a), (b, -a), (a, -b))
+    polygon = [(gx + x * ny + y * nx, gy - x * nx + y * ny) for x, y in local]
+    return gx, gy, polygon
 
 
-def initialize_gps():
-    """Calibrate while stationary, allowing up to ten seconds."""
-    global gps_status
-    if not gps.installed():
-        gps_status = "GPS missing: restart when connected"
+def _point_segment_distance(point, a, b):
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    t = max(0, min(1, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / (dx * dx + dy * dy)))
+    return _distance(point[0] - a[0] - t * dx, point[1] - a[1] - t * dy)
+
+
+def clearance(polygon):
+    """Minimum planar gap between observed goal envelope and chassis rectangle."""
+    w, l = ROBOT_WIDTH_MM / 2, ROBOT_LENGTH_MM / 2
+    robot = [(-w, -l), (w, -l), (w, l), (-w, l)]
+    separated = False
+    for shape in (robot, polygon):
+        for a, b in zip(shape, shape[1:] + shape[:1]):
+            nx, ny = -(b[1] - a[1]), b[0] - a[0]
+            r = [x * nx + y * ny for x, y in robot]
+            g = [x * nx + y * ny for x, y in polygon]
+            if min(g) > max(r) or min(r) > max(g):
+                separated = True
+    if not separated:
+        return 0.0
+    return min(_point_segment_distance(p, a, b) for first, second in ((robot, polygon), (polygon, robot))
+               for p in first for a, b in zip(second, second[1:] + second[:1]))
+
+
+def run_test():
+    global run_status, vision_target_id, vision_clearance_mm, vision_bearing_deg
+    global search_swept_deg, search_phase
+    vision_target_id = vision_clearance_mm = vision_bearing_deg = None
+    search_swept_deg, search_phase = 0.0, "Not needed"
+    brain = Brain()
+    left = Motor(Ports.PORT9, GearSetting.RATIO_18_1, False)
+    right = Motor(Ports.PORT10, GearSetting.RATIO_18_1, True)
+
+    def brake():
+        left.stop(BRAKE)
+        right.stop(BRAKE)
+
+    def display(status):
+        global run_status
+        run_status = status
+        brain.screen.clear_screen()
+        lines = ("AI Vision: first goal", status,
+                 "Tag: %s" % vision_target_id,
+                 "Gap estimate: %s mm" % (round(vision_clearance_mm) if vision_clearance_mm is not None else "--"),
+                 "Camera port: %s" % (AI_VISION_PORT if AI_VISION_PORT is not None else "virtual / unset"),
+                 "Search sweep: %.0f / 360 deg" % search_swept_deg)
+        for row, line in enumerate(lines):
+            brain.screen.set_cursor(row + 1, 1)
+            brain.screen.print(line)
+
+    brake()
+    if AI_VISION_PORT is None and not getattr(AiVision, "SIMULATED", False):
+        display("Stopped: set AI_VISION_PORT")
         return
-    gps_status = "Calibrating: keep robot still"
-    gps.calibrate()
-    wait(200, MSEC)
-    started = brain.timer.time(MSEC)
-    while gps.is_calibrating() and brain.timer.time(MSEC) - started < 10000:
-        wait(20, MSEC)
-    gps_status = "Calibration timeout: restart" if gps.is_calibrating() else "Ready"
-
-
-def read_pose():
-    """Return validated (x_mm, y_mm, heading_deg), or None without a GPS fix."""
-    if (gps_status != "Ready" or not GPS_MOUNT_CONFIGURED or
-            not gps.installed() or gps.is_calibrating() or
-            gps.quality() < MIN_GPS_QUALITY):
-        return None
-    x = gps.x_position(MM)
-    y = gps.y_position(MM)
-    heading = gps.heading()
-    # These comparisons also reject NaN and infinite readings.
-    if not (-FIELD_LIMIT_MM <= x <= FIELD_LIMIT_MM and
-            -FIELD_LIMIT_MM <= y <= FIELD_LIMIT_MM and 0 <= heading < 360):
-        return None
-    return x, y, heading
-
-
-def wait_for_gps_lock(timeout_ms, run_deadline=None):
-    """Stay braked until a valid fix lasts GPS_LOCK_MS, or a deadline expires."""
-    stop_drive()
-    lock_started = brain.timer.time(MSEC)
-    good_since = None
-    while True:
-        now = brain.timer.time(MSEC)
-        if (now - lock_started >= timeout_ms or
-                (run_deadline is not None and now >= run_deadline)):
-            return None
-        pose = read_pose()
-        if pose is None:
-            good_since = None
-        elif good_since is None:
-            good_since = now
-        elif now - good_since >= GPS_LOCK_MS:
-            return pose
-        wait(CONTROL_INTERVAL_MS, MSEC)
-
-
-def target_errors(x, y, heading):
-    """Return distance in mm and shortest signed turn in degrees to the target."""
-    dx = TARGET_X_MM - x
-    dy = TARGET_Y_MM - y
-    distance = math.sqrt(dx * dx + dy * dy)
-    # VEX: 0 degrees is +Y; headings increase clockwise toward +X.
-    bearing = math.atan2(dx, dy) * 180 / math.pi
-    error = (bearing - heading + 180) % 360 - 180
-    return distance, error
-
-
-def spin_motor(motor, speed):
-    """Command a signed percentage; negative values mean reverse."""
-    if speed == 0:
-        motor.stop(BRAKE)
-    else:
-        motor.spin(FORWARD if speed > 0 else REVERSE, abs(speed), PERCENT)
-
-
-def drive_to_centre():
-    """Turn toward the centre, drive with GPS feedback, and return a result."""
-    global run_status, distance_to_target, heading_error
-    stop_drive()
-    distance_to_target = None
-    heading_error = None
-    if gps_status != "Ready" or not GPS_MOUNT_CONFIGURED:
-        return "Stopped: GPS not ready"
-
-    run_status = "Waiting for GPS lock"
-    if wait_for_gps_lock(GPS_LOCK_TIMEOUT_MS) is None:
-        return "Stopped: no GPS lock"
-
-    started = brain.timer.time(MSEC)
-    run_deadline = started + RUN_TIMEOUT_MS
-    turning = True
-    previous_mode = None
-    best_progress = None
-    progress_time = started
-    settled_since = None
-    while True:
-        now = brain.timer.time(MSEC)
-        if now >= run_deadline:
-            return "Stopped: run timed out"
-        pose = read_pose()
-        if pose is None:
-            stop_drive()
-            run_status = "GPS lost: waiting for lock"
-            distance_to_target = None
-            heading_error = None
-            pose = wait_for_gps_lock(GPS_RECOVERY_TIMEOUT_MS, run_deadline)
-            now = brain.timer.time(MSEC)
-            if now >= run_deadline:
-                return "Stopped: run timed out"
-            if pose is None:
-                return "Stopped: GPS recovery timed out"
-            # Recompute from the recovered pose. Paused time is not driving time,
-            # and an arrival needs a fresh uninterrupted period of valid fixes.
-            turning = True
-            previous_mode = None
-            best_progress = None
-            progress_time = now
-            settled_since = None
-        distance_to_target, heading_error = target_errors(*pose)
-
-        if distance_to_target <= ARRIVAL_RADIUS_MM:
-            stop_drive()
-            run_status = "Checking centre position"
-            if settled_since is None:
-                settled_since = now
-            if now - settled_since >= ARRIVAL_SETTLE_MS:
-                return "Arrived at centre"
-            previous_mode = None
-            wait(CONTROL_INTERVAL_MS, MSEC)
-            continue
-        settled_since = None
-
-        # Hysteresis prevents repeatedly switching between turning and driving.
-        if turning and abs(heading_error) <= TURN_FINISH_DEG:
-            turning = False
-        elif not turning and abs(heading_error) >= TURN_RESTART_DEG:
-            turning = True
-        mode = "Turning" if turning else "Driving"
-        metric = abs(heading_error) if turning else distance_to_target
-        improvement = TURN_PROGRESS_DEG if turning else DRIVE_PROGRESS_MM
-        if best_progress is None or mode != previous_mode:
-            best_progress = metric
-            progress_time = now
-            previous_mode = mode
-        elif metric <= best_progress - improvement:
-            best_progress = metric
-            progress_time = now
-        elif now - progress_time >= PROGRESS_TIMEOUT_MS:
-            return "Stopped: no progress"
-        run_status = mode + " to centre"
-
-        if turning:
-            speed = min(MAX_TURN_PERCENT,
-                        max(MIN_TURN_PERCENT, abs(heading_error) * TURN_GAIN))
-            turn = speed if heading_error > 0 else -speed
-            left_speed, right_speed = turn, -turn
-        else:
-            forward = min(MAX_DRIVE_PERCENT,
-                          max(MIN_DRIVE_PERCENT, distance_to_target * DISTANCE_GAIN))
-            correction = max(-forward / 2,
-                             min(forward / 2, heading_error * STEERING_GAIN))
-            left_speed = forward + correction
-            right_speed = forward - correction
-            # Preserve the steering ratio while limiting both wheel speeds.
-            scale = max(1, max(abs(left_speed), abs(right_speed)) / MAX_DRIVE_PERCENT)
-            left_speed /= scale
-            right_speed /= scale
-        spin_motor(left_motor, left_speed)
-        spin_motor(right_motor, right_speed)
-        wait(CONTROL_INTERVAL_MS, MSEC)
-
-
-def autonomous():
-    """Run one centre test and brake on every exit."""
-    global run_status
+    if APPROACH_MODE not in ("steer", "straight") or STOP_CLEARANCE_MM is None or STOP_CLEARANCE_MM <= 0:
+        display("Stopped: set approach mode and gap")
+        return
+    if AI_VISION_PORT in (Ports.PORT9, Ports.PORT10, Ports.PORT18):
+        display("Stopped: camera port conflicts")
+        return
+    camera = AiVision(AI_VISION_PORT, AiVision.ALL_TAGS)
+    camera.set_tag_family(AiVision.TAG_CIRCLE21H7)
+    camera.tag_detection(True)
+    gps = Gps(Ports.PORT18, GPS_X_OFFSET_MM, GPS_Y_OFFSET_MM, MM, GPS_HEADING_OFFSET_DEG)
+    search = GpsGoalSearch(gps)
+    previous = None
+    previous_timestamp = None
+    last_fresh = brain.timer.time(MSEC)
+    started = last_fresh
+    approach_started = None
+    settle_until = started
     try:
-        run_status = drive_to_centre()
-    except Exception as error:
-        run_status = "Stopped: program error"
-        print("Centre test error:", error)
+        while True:
+            now = brain.timer.time(MSEC)
+            if approach_started is not None and now - approach_started >= APPROACH_TIMEOUT_MS:
+                display("Stopped: vision test timeout")
+                return
+            if not camera.installed():
+                display("Stopped: camera disconnected")
+                return
+            timestamp = camera.timestamp()
+            if timestamp == previous_timestamp:
+                if brain.timer.time(MSEC) - last_fresh > 250:
+                    display("Stopped: camera data stale")
+                    return
+                wait(20, MSEC)
+                continue
+            previous_timestamp = timestamp
+            last_fresh = brain.timer.time(MSEC)
+            objects = [obj for obj in camera.take_snapshot(AiVision.ALL_TAGS, 24) if obj.id in GOAL_TAG_IDS]
+            if previous is None:
+                if not objects:
+                    if now - started < CAMERA_STARTUP_GRACE_MS:
+                        turn, search_phase = 0, "Waiting for first camera frame"
+                    else:
+                        turn, search_phase = search.update(now)
+                    search_swept_deg = search.swept_deg
+                    if turn:
+                        left.spin(FORWARD, turn, PERCENT)
+                        right.spin(REVERSE, turn, PERCENT)
+                    else:
+                        brake()
+                    display(search_phase)
+                    if search_phase.startswith("Stopped:"):
+                        return
+                    wait(20, MSEC)
+                    continue
+                brake()
+                selected = objects[0]  # API order: greatest width first in the first nonempty frame.
+                vision_target_id = selected.id
+                approach_started = now
+                settle_until = now + (150 if search.started_ms is not None else 0)
+                search_phase = "Goal acquired"
+                print("Locked first visible goal: tag %s" % vision_target_id)
+            else:
+                previous_x, previous_y, previous_width = previous.centerX, previous.centerY, previous.width
+                matches = [obj for obj in objects if obj.id == vision_target_id and
+                           _distance(obj.centerX - previous_x, obj.centerY - previous_y) <= 45 and
+                           0.4 <= obj.width / max(1, previous_width) <= 2.5]
+                if not matches:
+                    display("Stopped: target lost")
+                    return
+                matches.sort(key=lambda obj: _distance(obj.centerX - previous_x, obj.centerY - previous_y))
+                if len(matches) > 1 and abs(matches[0].centerX - matches[1].centerX) < 5:
+                    display("Stopped: target ambiguous")
+                    return
+                selected = matches[0]
+            previous = selected
+            # Do not move during a calibration we started, even if a tag appears.
+            if search.started_ms is not None and gps.is_calibrating():
+                brake()
+                if now - search.started_ms >= SEARCH_GPS_CALIBRATION_MS:
+                    display("Stopped: GPS calibration timed out")
+                    return
+                display("Goal found: waiting for GPS calibration")
+                wait(20, MSEC)
+                continue
+            if now < settle_until:
+                brake()
+                display("Goal found: braking search turn")
+                wait(20, MSEC)
+                continue
+            try:
+                gx, gy, polygon = observed_goal(selected)
+                vision_clearance_mm = clearance(polygon)
+                vision_bearing_deg = math.degrees(math.atan2(gx, gy))
+            except (ValueError, ZeroDivisionError):
+                display("Stopped: tag pose unreliable")
+                return
+            # Brake on the first close reading, with a small allowance for
+            # frame delay and braking distance. This is still an estimate.
+            if vision_clearance_mm <= STOP_CLEARANCE_MM + 15:
+                display("Arrived: stopped before goal")
+                return
+            if gy <= 0 or abs(vision_bearing_deg) > 65:
+                display("Stopped: target outside approach")
+                return
+            if APPROACH_MODE == "straight" and abs(vision_bearing_deg) > 4:
+                display("Stopped: goal is not straight ahead")
+                return
+            turn = max(-MAX_TURN_PERCENT, min(MAX_TURN_PERCENT, vision_bearing_deg * 0.45)) if APPROACH_MODE == "steer" else 0
+            drive = min(MAX_DRIVE_PERCENT, max(4, (vision_clearance_mm - STOP_CLEARANCE_MM) * 0.06))
+            if abs(vision_bearing_deg) > 12:
+                drive = 0
+            left.spin(FORWARD, drive + turn, PERCENT)
+            right.spin(FORWARD, drive - turn, PERCENT)
+            display("Approaching first goal")
+            wait(20, MSEC)
     finally:
-        stop_drive()
-        print(run_status)
+        brake()
 
 
-# Keep still during calibration. Driving starts automatically after GPS lock.
-stop_drive()
-brain.screen.clear_screen()
-gps_screen_thread = Thread(gps_display)
-initialize_gps()
-autonomous()
-while True:
-    # Keep the result visible; rerun the program to start another test.
-    stop_drive()
-    wait(100, MSEC)
+if __name__ == "__main__":
+    run_test()

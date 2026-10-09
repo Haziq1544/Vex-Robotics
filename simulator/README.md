@@ -22,15 +22,15 @@ Choose a starting position and heading, then press **Run**. Positions are in mil
 - **Stop**, edit and save `src/main.py`, then **Run** to load your changes.
 - Read the simulated Brain screen and console for the program's status and errors.
 
-The current robot program begins moving automatically after its simulated GPS calibration and lock. Its own stopping conditions still apply. The simulator finishes when the program reports arrival or a stopped result, and keeps the final display visible.
+The current robot program begins moving when it sees its first goal tag. With no visible goal, it waits. It brakes on arrival or loss of the tracked tag, and keeps the final display visible.
 
 ## GPS and robot settings
 
 Use **ideal** GPS to check route logic with clean measurements. Use **realistic** GPS to explore the effects of measurement delay, noise and temporary loss of a position fix. These are illustrative sensor models, not a prediction of exactly when your physical sensor will lose its field-code view.
 
-The simulator's **physical GPS mounting position** is independent of the offsets configured in `src/main.py`. Enter the measured physical mounting location in the simulator and keep the real robot's configuration in the code. Deliberate differences let you see how an incorrect mounting offset changes the reported robot position.
+The simulator's **physical GPS mounting position** is independent of the offsets in robot code. The archived `examples/gps_centre_test.py` exercises GPS; the active vision program does not use GPS for targeting. Deliberate differences between physical and configured offsets let you test a biased GPS reading.
 
-**Model settings** includes Chassis, GPS, Field & engine, and Physics tabs. Save JSON preserves your measured configuration; load it in the dialog or start with `python simulate.py --config flex-model.json`. Use the Controls sidebar scrollbar to reach all telemetry on smaller screens. The dashed robot outline is its collision footprint; the GPS cone is a schematic illustration, not a calibrated camera field of view.
+**Model settings** includes AI Vision, Chassis, GPS, Field & engine, and Physics tabs. Save JSON preserves your measured configuration; load it in the dialog or start with `python simulate.py --config flex-model.json`. Use the Controls sidebar scrollbar to reach all telemetry on smaller screens. The dashed robot outline is its collision footprint; the GPS cone is a schematic illustration, not a calibrated camera field of view.
 
 Wheel size, track width, mass, traction and other robot settings begin as estimates. Measure your assembled robot and adjust these values before comparing distances or times with a physical run. Green motor cartridges and 1:1 external gearing alone do not determine the wheel size or the robot's turning behaviour.
 
@@ -74,33 +74,78 @@ positions of the current layout, so repeated collision tests use the same setup.
 Field JSON save/load preserves custom starting layouts; model JSON also includes
 the layout. Saved layouts contain authored positions independently of run results.
 
-The unchanged `src/main.py` still targets `(0, 0)`. On Override this is occupied
-by a fixed goal: expect the robot to contact it and eventually report its
-existing no-progress stop instead of reaching the centre. Select **Empty field**
-to reproduce the earlier centre-arrival test. No route planning has been added
-to the robot program.
+The active `src/main.py` selects the first visible goal tag and has no fixed
+field-coordinate target. The previous centre test is archived in
+`examples/gps_centre_test.py`; normal launches and uploads do not run it.
 
 Official dimensions, coordinates, and simplifications are documented in
 [FIELD_SOURCES.md](FIELD_SOURCES.md). These are 2D rigid footprints; they cannot
-predict whether a raised mechanism can pass over an object. Scoring, vision,
+predict whether a raised mechanism can pass over an object. Scoring,
 obstacle avoidance, and cup/stacker behavior will be implemented later.
+
+## AI Vision and AprilTag approach
+
+Launch **Flex Simulator** or **AI Vision Simulator** with F5, or use
+`python simulate.py`. All normal launch paths run `src/main.py`, reloading it
+on each Run. `--vision` remains an alias for the same program.
+
+The **Vision** tab shows synthetic 320 by 240 pixel observations of visible goal
+tags. The field shows the camera's viewing cone. Rotate or move the robot while
+stopped to inspect the preview; use **Hide tags for 1 second** during a run to
+test the controller's loss response. Loaders can block tags but are not detected
+as tagged targets.
+
+During a run, **Locked goal: ID ...** identifies the controller's chosen tag,
+separately from the list of visible tags. The console records the actual program
+loaded and the first acquired tag. A running program that has not created a
+camera does not get synthetic preview detections. Before Run, the preview is
+only shown for source declaring `PROGRAM_KIND = "ai_vision_first_goal"`.
+If an editor undo or file replacement restores the old GPS code in `src/main.py`,
+normal launches refuse it with an explicit message instead of driving to centre
+under a vision label. Reload the intended saved source before running.
+
+The example Override start is `(1400, -1200)` mm, heading `270°`, facing an
+off-centre neutral goal. Drag the robot or enter any valid starting position
+and heading in Controls. Run preserves that pose. The program does not receive
+this example coordinate or a designated goal: it follows the first visible tag.
+It does not plan routes around intervening objects. No target means no motion;
+losing an acquired target brakes and ends the test rather than searching.
+
+The user-selected `STOP_CLEARANCE_MM` is **50 mm** from the chassis to the goal.
+Lower tags can leave the estimated camera's view before that gap is reached;
+the robot brakes early on loss rather than continuing without a target.
+`AI_VISION_PORT` stays unset until the real wiring is known. Only the simulator
+accepts an unset virtual camera port.
+
+The camera mount follows editable estimates from the Flex sensor PDF, with
+the lift held in its pictured pose. Set the simulated physical mount in **Model
+settings → AI Vision**, and keep matching calibration constants in the robot
+test when modelling a correctly calibrated camera. Changing one does not
+silently change the other. See [VISION_SOURCES.md](VISION_SOURCES.md) for
+measurements, synthetic detection limits and hardware transfer instructions.
+
+On normal completion, the simulator advances braking physics for up to one
+additional second. The final position and collision count include that travel;
+headless results include `braking_settled`. This avoids reporting arrival while
+the robot still has its pre-braking speed.
 
 ## Run without a window
 
 From the project folder:
 
 ```powershell
-python simulate.py --headless --duration 60 --start-x -1000 --start-y -1000 --heading 0 --gps-mode ideal
+python simulate.py --headless --duration 20 --start-x 1400 --start-y -1200 --heading 270
 python simulate.py --headless --layout override --gps-mode ideal --duration 20
 ```
 
 `--duration` is the maximum simulated time in seconds; arrival or a stopped result can finish the run earlier. Add `--output result.json` to save the JSON result, or use `--help` to see the available options. Repeating the same configuration and seed is intended to make local runs reproducible; changing the model settings changes the result.
 
-Headless mode defaults to an empty field for compatibility with existing tests.
+Normal GUI and headless launches default to Override unless a config or explicit
+layout is supplied. Custom `--program` headless runs keep the empty-field default.
 Use `--layout override` to select the game preset, or `--config saved-model.json`
 to run a saved layout. `--layout` explicitly overrides the layout in a config.
-The Override default start is `(-900, -900)` mm; the empty-field default remains
-`(-1000, -1000)` mm. Override goals and loaders make some previous starting poses
+The default vision pose is described above; the empty-field default remains
+`(-1000, -1000)` mm. Override goals and loaders make some starting poses
 invalid. The initial robot footprint must be clear of physical obstacles.
 
 ## What this can verify
@@ -109,8 +154,8 @@ The model includes finite acceleration, motor torque, wheel traction, wall and e
 
 It has not been validated against this physical robot. Wheel slip, sensor visibility, contact with game objects and other real conditions may behave differently. Reaching the target here does not establish that the robot will follow the same path on the competition field.
 
-The VEX compatibility layer implements the APIs needed by the project, rather than the entire VEX runtime. Unsupported calls should produce an explicit error in the console. The original `src/main.py` remains the program to upload to the Brain; simulator files are for your computer only.
+The VEX compatibility layer implements the APIs needed by the project, rather than the entire VEX runtime. Unsupported calls should produce an explicit error in the console. `src/main.py` is the program to upload to the Brain after setting its camera port and calibration; simulator files are for your computer only.
 
-Currently supported: `Brain` text screen and timer, `Motor` construction/spin/stop/velocity/position, `Gps` mounting/position/heading/quality/calibration, cooperative `Thread`/`wait`, and basic autonomous `Competition` registration. Additional sensors, motor mechanisms, and drivetrain convenience classes need models before programs using those APIs can run. A program loop must call `wait()` regularly; a busy loop without it is reported instead of freezing the desktop window.
+Currently supported: `Brain` text screen and timer, `Motor` construction/spin/stop/velocity/position, `Gps` mounting/position/heading/quality/calibration, the AprilTag subset of `AiVision` with `Tagdesc`, cooperative `Thread`/`wait`, and basic autonomous `Competition` registration. Additional sensors, motor mechanisms, and drivetrain convenience classes need models before programs using those APIs can run. A program loop must call `wait()` regularly; a busy loop without it is reported instead of freezing the desktop window.
 
 For model provenance, equations and calibration limits, read [PHYSICS_SOURCES.md](PHYSICS_SOURCES.md). Run the checks with `python -m unittest discover -s tests -v` from the project root.

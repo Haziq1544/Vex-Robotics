@@ -203,6 +203,62 @@ class FieldEditorTests(unittest.TestCase):
         self.assertEqual(draw_polygon.call_count, 1)
         self.assertEqual(resolve_elements(self.app.config), [goal])
 
+    def test_default_program_previews_vision_from_user_chosen_pose(self):
+        self.choose("override")
+        self.app.sidebar.select(3)
+        self.app.start_x.set("1400")
+        self.app.start_y.set("-1200")
+        self.app.start_heading.set("270")
+        self.app.apply_start()
+        self.root.update()
+        self.assertEqual(self.app.program_path, ROOT / "src" / "main.py")
+        self.assertIn("first visible goal", self.app.program_name)
+        self.assertEqual(self.app.world["x_mm"], 1400)
+        self.assertEqual(self.app.world["y_mm"], -1200)
+        self.assertEqual(self.app.world["heading_deg"], 270)
+        self.assertIn("ID 4", self.app.vision_text.get())
+        self.assertIn("Preview", self.app.vision_text.get())
+        self.assertGreater(len(self.app.camera_canvas.find_all()), 1)
+        dialog = ModelSettings(self.app)
+        try:
+            self.assertEqual(dialog._read()["vision"], self.app.config["vision"])
+        finally:
+            dialog.window.destroy()
+        self.app.reset()
+        self.root.update()
+        self.assertEqual(self.app.world["x_mm"], 1400)
+        self.assertEqual(self.app.world["y_mm"], -1200)
+        self.assertIsNone(self.app.target)
+
+    def test_gps_file_named_main_does_not_get_a_vision_label_or_preview(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "main.py"
+            path.write_text((ROOT / "examples" / "gps_centre_test.py").read_text(encoding="utf-8"), encoding="utf-8")
+            self.app.program_path = path
+            self.app._refresh_program_info()
+            self.app.redraw()
+            self.assertEqual(self.app.program_name, "Fixed coordinate navigation")
+            self.assertIsNone(self.app._vision_for_display())
+            self.assertIn("has not started", self.app.vision_text.get())
+            with patch("simulator.program.DEFAULT_PROGRAM", path.resolve()):
+                self.app.start()
+            self.assertIn("not the AI Vision", self.app.status.get())
+            self.assertIsNone(self.app.session)
+
+    def test_running_snapshot_uses_actual_camera_and_shows_locked_tag(self):
+        self.choose("override")
+        self.app.start_x.set("1400")
+        self.app.start_y.set("-1200")
+        self.app.start_heading.set("270")
+        self.app.apply_start()
+        state = self.app._vision_for_display()
+        self.app._accept_snapshot({"world": dict(self.app.world), "time_s": .2,
+                                   "vision": state, "vision_tracking": {"id": 4, "clearance_mm": 500}})
+        self.assertIn("Locked goal: ID 4", self.app.vision_text.get())
+        self.app._accept_snapshot({"world": dict(self.app.world), "time_s": .3, "vision": None})
+        self.assertIsNone(self.app._vision_for_display(), "Never fabricate camera readings for a running program")
+        self.assertIn("has not started", self.app.vision_text.get())
+
 
 if __name__ == "__main__":
     unittest.main()

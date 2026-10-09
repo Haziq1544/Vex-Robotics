@@ -47,33 +47,41 @@ def run_headless(config, program, pose, duration=60, gps_mode="ideal"):
             "seed": config["simulation"]["seed"]}
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--program", type=Path, default=ROOT / "src" / "main.py")
+    parser.add_argument("--vision", action="store_true", help="Run the default first-visible-goal program (compatibility alias)")
     parser.add_argument("--config", type=Path, help="JSON model settings or partial overrides")
     parser.add_argument("--layout", choices=[name for name in PRESETS if name != "custom"],
-                        help="Field preset; GUI defaults to Override, headless to empty unless loading a config")
+                        help="Field preset; the default vision program uses Override unless loading a config")
     parser.add_argument("--headless", action="store_true", help="Run without a window and print a JSON result")
     parser.add_argument("--duration", type=float, default=60, help="Maximum headless simulation seconds")
     parser.add_argument("--start-x", type=float, help="Starting X in mm")
     parser.add_argument("--start-y", type=float, help="Starting Y in mm")
-    parser.add_argument("--heading", type=float, default=0, help="Clockwise heading; 0 faces +Y")
+    parser.add_argument("--heading", type=float, help="Clockwise heading; 0 faces +Y")
     parser.add_argument("--gps-mode", choices=("ideal", "realistic"), default="realistic")
     parser.add_argument("--speed", type=float, default=1, help="GUI playback speed")
     parser.add_argument("--output", type=Path, help="Save headless result as JSON")
     parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if not all(math.isfinite(v) and v > 0 for v in (args.duration, args.speed)):
         parser.error("Duration and speed must be finite and positive")
     try:
         config = load_config(args.config)
+        if args.vision:
+            args.program = ROOT / "src" / "main.py"
+        vision_program = args.program.resolve() == (ROOT / "src" / "main.py").resolve()
         if args.layout:
             set_preset(config, args.layout)
-        elif args.config is None and not args.headless:
+        elif args.config is None and (not args.headless or vision_program):
             set_preset(config, "override")
         default_start = -900 if config["layout"]["preset"] == "override" else -1000
-        args.start_x = default_start if args.start_x is None else args.start_x
-        args.start_y = default_start if args.start_y is None else args.start_y
+        # An example pose facing a non-central goal, not a navigation target.
+        # Explicit coordinates/headings are always preserved.
+        default_pose = (1400, -1200, 270) if vision_program and config["layout"]["preset"] == "override" else (default_start, default_start, 0)
+        args.start_x = default_pose[0] if args.start_x is None else args.start_x
+        args.start_y = default_pose[1] if args.start_y is None else args.start_y
+        args.heading = default_pose[2] if args.heading is None else args.heading
         if not args.program.is_file():
             raise ValueError("Program file not found: " + str(args.program))
         pose = {"x_mm": args.start_x, "y_mm": args.start_y, "heading_deg": args.heading}

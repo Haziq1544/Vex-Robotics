@@ -12,6 +12,8 @@ import traceback
 import types
 
 from .physics import World
+from .vision import VisionModel, vex_object
+from .program import read_program
 
 
 class SimulationHalt(BaseException):
@@ -187,11 +189,14 @@ class _Runtime:
         self.config = config
         self.world = World(config, start_pose)
         self.gps = GPSModel(self.world, config, gps_mode)
+        self.vision = VisionModel(self.world, config["vision"])
+        self.vision_used = False
         self.scheduler = _Scheduler(self)
         self.lines = [""] * 12
         self.logs = []
         self.log_revision = 0
         self.namespace = {}
+        self.program_info = {"kind": "custom", "name": "Loading program"}
         self.error: str | None = None
 
     def log(self, *args, sep=" ", end="\n", **kwargs):
@@ -207,6 +212,12 @@ class _Runtime:
                       "radius_mm": self.namespace.get("ARRIVAL_RADIUS_MM", 0)}
         return {"type": "snapshot", "time_s": self.world.time_s,
                 "world": self.world.snapshot(), "gps": self.gps.read(),
+                "vision": self.vision.snapshot() if self.vision_used else None,
+                "program": dict(self.program_info),
+                "vision_tracking": {"id": self.namespace.get("vision_target_id"),
+                                    "clearance_mm": self.namespace.get("vision_clearance_mm")},
+                "vision_search": {"phase": self.namespace.get("search_phase"),
+                                  "swept_deg": self.namespace.get("search_swept_deg", 0)},
                 "brain_lines": list(self.lines), "logs": list(self.logs),
                 "log_revision": self.log_revision, "target": target,
                 "status": str(self.namespace.get("run_status", "Running program")),
@@ -215,6 +226,23 @@ class _Runtime:
     def brake(self):
         for key in ("left_port", "right_port"):
             self.world.set_motor(self.config["robot"][key], {"percent": 0, "brake": "brake"})
+
+    def settle_brakes(self):
+        """Include braking travel in final position/contact results, up to 1 s."""
+        self.scheduler.close()
+        self.brake()
+        dt = self.config["simulation"]["step_ms"] / 1000
+        for _ in range(math.ceil(1 / dt)):
+            if (math.hypot(self.world.vx, self.world.vy) < .001 and
+                    abs(self.world.omega) < math.radians(.1) and
+                    max(abs(v) for v in self.world.wheel_speed) < .001):
+                return True
+            self.brake()
+            self.world.step(dt)
+            self.gps.update()
+            if self.vision_used:
+                self.vision.update()
+        return False
 
 
 def build_vex_module(runtime):
@@ -383,6 +411,62 @@ def build_vex_module(runtime):
             factor = 25.4 if units == Units.INCHES else 1
             runtime.gps.configure(x * factor, y * factor, runtime.gps.offset[2])
 
+    class Tagdesc:
+        def __init__(self, index):
+            if isinstance(index, bool) or not isinstance(index, int) or not (0 <= index <= 37 or index == 0xFFFF):
+                raise ValueError("AprilTag ID must be 0..37")
+            self.id = index
+
+    class AiVision:
+        # No guessed hardware port. None identifies the virtual device only.
+        SIMULATED = True
+        ALL_TAGS = Tagdesc(0xFFFF)
+        TAG_CIRCLE21H7, TAG_16H5, TAG_25H9, TAG_36H11 = range(4)
+        TAG_OBJECT = 8
+
+        def __init__(self, port, *signatures):
+            if port is not None:
+                if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 21:
+                    raise ValueError("AI Vision port must be a Smart Port or None for the virtual camera")
+                if port in (runtime.config["robot"]["left_port"], runtime.config["robot"]["right_port"], runtime.config["robot"]["gps_port"]):
+                    raise ValueError("AI Vision port conflicts with existing motor/GPS wiring")
+            if any(not isinstance(signature, Tagdesc) for signature in signatures):
+                raise UnsupportedVexAPI("AI Vision simulation currently supports AprilTags only")
+            runtime.vision_used = True
+            self._objects = ()
+
+        def installed(self):
+            return runtime.vision.connected
+
+        def tag_detection(self, enable):
+            if bool(enable) != runtime.vision.enabled:
+                runtime.vision.objects = []
+                runtime.vision.pending.clear()
+            runtime.vision.enabled = bool(enable)
+
+        def set_tag_family(self, family):
+            if family != self.TAG_CIRCLE21H7:
+                raise UnsupportedVexAPI("Only the Override Circle21h7 AprilTags are modeled")
+            runtime.vision.family = family
+
+        def take_snapshot(self, signature, count=8):
+            if not isinstance(signature, Tagdesc):
+                raise UnsupportedVexAPI("Use AiVision.ALL_TAGS or Tagdesc(id)")
+            if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 24:
+                raise ValueError("Snapshot count must be an integer from 1 to 24")
+            matches = [item for item in runtime.vision.read() if signature.id in (0xFFFF, item["id"])]
+            self._objects = tuple(vex_object(item) for item in matches[:count])
+            return self._objects
+
+        def timestamp(self):
+            return runtime.vision.timestamp_ms
+
+        def object_count(self):
+            return len(self._objects)
+
+        def largest_object(self):
+            return self._objects[0] if self._objects else None
+
     class Thread:
         def __init__(self, callback, args=()):
             self.ident = runtime.scheduler.spawn(callback, args)
@@ -408,6 +492,7 @@ def build_vex_module(runtime):
             return False
 
     exports = {"Brain": Brain, "Motor": Motor, "Gps": Gps, "Thread": Thread,
+               "AiVision": AiVision, "Tagdesc": Tagdesc,
                "Timer": Timer, "Competition": Competition, "Ports": Ports,
                "GearSetting": GearSetting, "BrakeType": BrakeType, "wait": wait,
                "TimeUnits": Units, "DistanceUnits": Units, "RotationUnits": Units,
@@ -424,10 +509,12 @@ def _worker_main(connection, config, program_path, start_pose, realtime, speed, 
     try:
         runtime = _Runtime(config, start_pose, gps_mode)
         program_path = Path(program_path).resolve()
-        code = compile(program_path.read_text(encoding="utf-8-sig"), str(program_path), "exec")
+        source, runtime.program_info = read_program(program_path, require_default_vision=True)
+        code = compile(source, str(program_path), "exec")
         sys.modules["vex"] = build_vex_module(runtime)
         sys.path.insert(0, str(program_path.parent))
         runtime.namespace = {"__name__": "__main__", "__file__": str(program_path), "print": runtime.log}
+        runtime.log("[Simulator] Running %s (%s)" % (runtime.program_info["name"], program_path))
         runtime.scheduler.spawn(lambda: exec(code, runtime.namespace), main=True)
         paused, stepping = False, False
         next_wall = time.monotonic()
@@ -449,6 +536,8 @@ def _worker_main(connection, config, program_path, start_pose, realtime, speed, 
                     next_wall = time.monotonic()
                 elif command["type"] == "gps_loss":
                     runtime.gps.loss_until = runtime.world.time_s + max(0, command["seconds"])
+                elif command["type"] == "vision_loss":
+                    runtime.vision.loss_until = runtime.world.time_s + max(0, command["seconds"])
             now_wall = time.monotonic()
             if (realtime and now_wall >= next_snapshot) or (not realtime and runtime.world.time_s >= next_sim_snapshot):
                 connection.send(runtime.snapshot(paused))
@@ -475,6 +564,8 @@ def _worker_main(connection, config, program_path, start_pose, realtime, speed, 
                 break
             runtime.world.step(dt)
             runtime.gps.update()
+            if runtime.vision_used:
+                runtime.vision.update()
             if stepping:
                 stepping = False
                 connection.send(runtime.snapshot(True))
@@ -485,8 +576,10 @@ def _worker_main(connection, config, program_path, start_pose, realtime, speed, 
                     time.sleep(min(delay, 0.02))
                 elif delay < -0.25:
                     next_wall = time.monotonic()
-        runtime.brake()
-        connection.send(runtime.snapshot(True))
+        settled = runtime.settle_brakes()
+        final_snapshot = runtime.snapshot(True)
+        final_snapshot["braking_settled"] = settled
+        connection.send(final_snapshot)
         connection.send({"type": "exit", "reason": reason, "message": str(runtime.namespace.get("run_status", reason)),
                          "error": runtime.error})
     except BaseException:
@@ -544,6 +637,9 @@ class SimulatorSession:
 
     def inject_gps_loss(self, seconds: float = 1.0):
         self._send({"type": "gps_loss", "seconds": seconds})
+
+    def inject_vision_loss(self, seconds: float = 1.0):
+        self._send({"type": "vision_loss", "seconds": seconds})
 
     def poll(self):
         messages = []

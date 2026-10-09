@@ -41,6 +41,22 @@
     "turn_dropout_deg_s": 100.0,
     "wall_min_distance_mm": 100.0
   },
+  "vision": {
+    "x_mm": 0.0,
+    "y_mm": 140.0,
+    "height_mm": 180.0,
+    "yaw_deg": 0.0,
+    "pitch_deg": 0.0,
+    "horizontal_fov_deg": 74.0,
+    "vertical_fov_deg": 63.0,
+    "tag_size_mm": 25.0,
+    "sample_hz": 20.0,
+    "latency_ms": 50.0,
+    "near_mm": 50.0,
+    "far_mm": 2500.0,
+    "minimum_tag_pixels": 4.0,
+    "max_tag_angle_deg": 75.0
+  },
   "simulation": {"step_ms": 5.0, "seed": 7},
   "notes": [
     "Estimated Flex geometry and mass from supplied build diagrams: 430 x 400 mm footprint, 330 mm track, 6.5 kg. Replace with measurements.",
@@ -49,6 +65,9 @@
     "Green 200 RPM is specified by VEX. 1.05 Nm is an ideal gear-ratio estimate from the documented 2.1 Nm red100 RPM stall torque.",
     "All friction, motor response, wheel inertia, GPS noise/delay/dropout settings are tunable approximations, not measured VEX specifications.",
     "Robot collision shape is a fixed rectangle centered at the drive turning center; raised/folded mechanisms are not separately simulated.",
-    "Physical GPS mount is independent of Gps(...) code offsets: wrong code offsets produce biased simulated readings. Ports remain 9, 10 and 18."
+    "Physical GPS mount is independent of Gps(...) code offsets: wrong code offsets produce biased simulated readings. Ports remain 9, 10 and 18.",
+    "AI Vision mount estimates from Flex sensor build pp22-25: centered, 140 mm forward, 180 mm high, facing forward with fixed lift pose. Measure before physical testing.",
+    "AI Vision uses official 320x240 and 74x63 degree FOV. Tag detection square size 25 mm, rate, latency, angle, range and pixel thresholds are provisional; calibrate against the real camera.",
+    "Physical camera settings are independent of src/main.py calibration; update both for a matched model. The real AI Vision port is deliberately unset."
   ]
 }

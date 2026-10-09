@@ -14,6 +14,7 @@ from tkinter import filedialog, messagebox, ttk
 from .field_elements import (ELEMENT_SPECS, ACTIVE_ELEMENT_SPECS, PRESETS, element_polygon,
                              make_element, materialize_layout, resolve_elements,
                              set_preset, validate_layout)
+from .program import read_program, VISION_KIND
 
 
 BG = "#101721"
@@ -67,6 +68,7 @@ class SimulatorApp:
         self.snapshot = None
         self.world: dict[str, Any] = {"x_mm": -1000.0, "y_mm": -1000.0, "heading_deg": 0.0}
         self.gps = None
+        self.vision_state = None
         self.target = None
         self.trail = []
         self.dragging = False
@@ -92,6 +94,9 @@ class SimulatorApp:
         self.start_heading = tk.StringVar(value="0")
         self.heading_slider = tk.DoubleVar(value=0)
         self.speed = tk.StringVar(value="1")
+        self.program_kind, self.program_name = "custom", self.program_path.name
+        self.program_text = tk.StringVar()
+        self._refresh_program_info()
         self.gps_mode = tk.StringVar(value="realistic")
         self.status = tk.StringVar(value="Ready — choose a starting pose, then Run")
         self.readouts = {name: tk.StringVar(value="—") for name in
@@ -144,6 +149,19 @@ class SimulatorApp:
         self.root.option_add("*TCombobox*Listbox.background", PANEL)
         self.root.option_add("*TCombobox*Listbox.foreground", TEXT)
 
+    def _refresh_program_info(self, require_default_vision=False):
+        try:
+            _, info = read_program(self.program_path, require_default_vision=require_default_vision)
+        except (OSError, SyntaxError, ValueError):
+            self.program_kind = "custom"
+            self.program_name = "Source needs attention: " + self.program_path.name
+            self.program_text.set(self.program_name)
+            if require_default_vision:
+                raise
+        else:
+            self.program_kind, self.program_name = info["kind"], info["name"]
+            self.program_text.set(self.program_name)
+
     def _build(self):
         outer = ttk.Frame(self.root, style="Outer.TFrame", padding=18)
         outer.pack(fill="both", expand=True)
@@ -152,7 +170,8 @@ class SimulatorApp:
         title = ttk.Frame(header, style="Outer.TFrame")
         title.pack(side="left")
         ttk.Label(title, text="Flex field simulator", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(title, text="Local V5 Python preview  ·  " + self.program_path.name,
+        self.program_subtitle = tk.StringVar(value="Local V5 Python preview  ·  " + self.program_path.name)
+        ttk.Label(title, textvariable=self.program_subtitle,
                   style="Subtitle.TLabel").pack(anchor="w", pady=(3, 0))
         self.settings_button = ttk.Button(header, text="Model settings…", command=self.open_settings)
         self.settings_button.pack(side="right")
@@ -223,7 +242,12 @@ class SimulatorApp:
         self._build_controls(control)
         self._build_editor(editor)
         self._build_brain(brain)
-        if self.config.get("layout", {}).get("preset", "empty") != "empty":
+        vision_tab = ttk.Frame(sidebar, padding=12)
+        sidebar.add(vision_tab, text="Vision")
+        self._build_vision(vision_tab)
+        if self.program_kind == VISION_KIND:
+            sidebar.select(control_tab)
+        elif self.config.get("layout", {}).get("preset", "empty") != "empty":
             sidebar.select(editor_tab)
         footer = ttk.Frame(outer, style="Outer.TFrame")
         footer.pack(fill="x", pady=(12, 0))
@@ -231,6 +255,8 @@ class SimulatorApp:
                   wraplength=1040).pack(anchor="w")
 
     def _build_controls(self, parent):
+        self._section(parent, "ROBOT PROGRAM")
+        ttk.Label(parent, textvariable=self.program_text, wraplength=280).pack(anchor="w", pady=(6, 16))
         self._section(parent, "STARTING POSITION")
         row = ttk.Frame(parent)
         row.pack(fill="x", pady=(6, 10))
@@ -333,8 +359,7 @@ class SimulatorApp:
             button.pack(side="left", expand=True, fill="x", padx=(0, 5))
             self._editor_buttons.append(button)
         ttk.Label(parent, text="Only goals and loaders are enabled. They stay anchored during a run "
-                  "and block the robot. Red outlines mean contact. "
-                  "The centre goal blocks main.py's current target.",
+                  "and block the robot. Red outlines mean contact.",
                   style="Muted.TLabel", wraplength=260).pack(anchor="w")
 
     def _sync_layout_controls(self):
@@ -500,6 +525,78 @@ class SimulatorApp:
     def _section(parent, text, top=0):
         ttk.Label(parent, text=text, style="Section.TLabel").pack(anchor="w", pady=(top, 0))
 
+    def _build_vision(self, parent):
+        self._section(parent, "AI VISION · APRILTAGS")
+        ttk.Label(parent, text="Synthetic camera observations (320 × 240). Only visible goal tags are detected.",
+                  style="Muted.TLabel", wraplength=280).pack(anchor="w", pady=(8, 10))
+        self.camera_canvas = tk.Canvas(parent, width=300, height=225, bg="#080d13", highlightthickness=1,
+                                       highlightbackground="#465864")
+        self.camera_canvas.pack(fill="x")
+        self.camera_canvas.bind("<Configure>", lambda event: self.redraw())
+        self.vision_text = tk.StringVar(value="Move or rotate the robot to preview visible goals")
+        ttk.Label(parent, textvariable=self.vision_text, wraplength=280, style="Muted.TLabel").pack(anchor="w", pady=10)
+        self.vision_loss_button = ttk.Button(parent, text="Hide tags for 1 second", command=self.inject_vision_loss)
+        self.vision_loss_button.pack(fill="x", pady=(0, 10))
+        ttk.Label(parent, text="Start anywhere the robot fits. The first visible goal is selected; there is no fixed field target. "
+                  "With no visible tag, GPS guides one search turn. Leave room to turn and a clear approach path.",
+                  style="Muted.TLabel", wraplength=280).pack(anchor="w", pady=(0, 10))
+        ttk.Label(parent, text="Camera port is virtual/unset. Mount and tag size are estimates; adjust them in Model settings. "
+                  "The lift stays at the PDF's pictured position.", style="Muted.TLabel", wraplength=280).pack(anchor="w")
+
+    def inject_vision_loss(self):
+        if self.session is not None and self.session.alive:
+            self.session.inject_vision_loss(1.0)
+
+    def _vision_for_display(self):
+        if self.snapshot is not None:
+            return self.vision_state
+        if self.program_kind != VISION_KIND:
+            return None
+        from types import SimpleNamespace
+        from .vision import VisionModel
+        world = SimpleNamespace(x_mm=self.world["x_mm"], y_mm=self.world["y_mm"],
+                                heading_deg=self.world["heading_deg"], time_s=0.0,
+                                elements=resolve_elements(self.config))
+        camera = VisionModel(world, self.config["vision"])
+        camera.objects = camera._observe()
+        return camera.snapshot()
+
+    def _draw_vision(self):
+        state = self._vision_for_display()
+        view = self.camera_canvas
+        view.delete("all")
+        sx, sy = max(1, view.winfo_width()) / 320, max(1, view.winfo_height()) / 240
+        view.create_line(160 * sx, 0, 160 * sx, 240 * sy, fill="#293d48", dash=(3, 4))
+        if state is None:
+            self.vision_text.set("This program has not started an AI Vision camera.")
+            return
+        for obj in state["objects"]:
+            points = [coordinate for x, y in zip(obj["corners_x"], obj["corners_y"]) for coordinate in (x * sx, y * sy)]
+            view.create_polygon(points, outline=GREEN, fill="", width=2)
+            view.create_text(obj["originX"] * sx, max(10, obj["originY"] * sy - 9),
+                             text="ID %s" % obj["id"], anchor="w", fill=GREEN, font=("Consolas", 9))
+        rows = ["%d visible tag face(s)" % len(state["objects"])]
+        if self.vision_state is None:
+            rows.insert(0, "Preview — camera program is not running")
+        else:
+            tracking = (self.snapshot or {}).get("vision_tracking", {})
+            tag_id, gap = tracking.get("id"), tracking.get("clearance_mm")
+            rows.insert(0, "Locked goal: ID %s" % tag_id if tag_id is not None else "No goal locked yet")
+            if gap is not None:
+                rows.insert(1, "Last gap estimate: %.0f mm" % gap)
+            search = (self.snapshot or {}).get("vision_search", {})
+            if search.get("phase"):
+                rows.insert(1, "%s · %.0f° swept" % (search["phase"], search.get("swept_deg", 0)))
+        rows += ["ID %s · (%s, %s) · %s×%s px" % (o["id"], o["centerX"], o["centerY"], o["width"], o["height"])
+                 for o in state["objects"][:6]]
+        self.vision_text.set("\n".join(rows))
+        x, y, heading = state["camera_x_mm"], state["camera_y_mm"], state["camera_heading_deg"]
+        points = [self._point(x, y)]
+        for sign in (-1, 1):
+            angle = math.radians(heading + sign * state["horizontal_fov_deg"] / 2)
+            points.append(self._point(x + state["far_mm"] * math.sin(angle), y + state["far_mm"] * math.cos(angle)))
+        self._polygon(points, fill="", outline="#597957", dash=(4, 5))
+
     def _build_brain(self, parent):
         self._section(parent, "V5 BRAIN SCREEN")
         self.brain_display = tk.Text(parent, height=11, width=33, bg="#090f14", fg=CYAN,
@@ -524,6 +621,7 @@ class SimulatorApp:
         for widget in (self.run_button, self.settings_button, *self.pose_entries, self.heading_scale):
             widget.configure(state="disabled" if running else "normal")
         self.mode_combo.configure(state="disabled" if running else "readonly")
+        self.vision_loss_button.configure(state="normal" if running and self.vision_state is not None else "disabled")
         for widget in (self.pause_button, self.stop_button, self.dropout_button):
             widget.configure(state="normal" if running else "disabled")
         self.step_button.configure(state="normal" if running and self.paused else "disabled")
@@ -574,6 +672,7 @@ class SimulatorApp:
         if self._running():
             return
         try:
+            self._refresh_program_info(require_default_vision=True)
             pose = self._starting_pose()
             from .physics import World
             World(self.config, pose)
@@ -625,6 +724,7 @@ class SimulatorApp:
         self.status.set("Reset run — robot and elements restored to their starting positions")
 
     def _clear_outputs(self):
+        self.vision_state = None
         self.snapshot = None
         self.gps = None
         self.target = None
@@ -684,8 +784,13 @@ class SimulatorApp:
 
     def _accept_snapshot(self, snapshot):
         self.snapshot = snapshot
+        info = snapshot.get("program")
+        if info is not None:
+            self.program_kind, self.program_name = info["kind"], info["name"]
+            self.program_text.set(self.program_name)
         self.world = snapshot.get("world", self.world)
         self.gps = snapshot.get("gps")
+        self.vision_state = snapshot.get("vision")
         self.target = snapshot.get("target")
         self.paused = snapshot.get("paused", self.paused)
         position = (self.world.get("x_mm", 0), self.world.get("y_mm", 0))
@@ -793,6 +898,7 @@ class SimulatorApp:
             points = [coordinate for point in self.trail for coordinate in self._point(*point)]
             canvas.create_line(*points, fill="#3b919c", width=2)
         self._draw_elements(scale)
+        self._draw_vision()
         self._draw_robot(scale)
         if self.gps:
             gx, gy = self.gps.get("x_mm"), self.gps.get("y_mm")
@@ -1054,6 +1160,19 @@ class ModelSettings:
     """Edit the physical model independently of main.py's device configuration."""
 
     FIELDS = {
+        "AI Vision": [
+            ("vision", "x_mm", "Camera right offset (mm) — estimate"),
+            ("vision", "y_mm", "Camera forward offset (mm) — estimate"),
+            ("vision", "height_mm", "Camera height (mm) — estimate"),
+            ("vision", "yaw_deg", "Camera yaw: forward = 0°"),
+            ("vision", "pitch_deg", "Camera pitch: up positive (°)"),
+            ("vision", "tag_size_mm", "Detection square size (mm) — estimate"),
+            ("vision", "horizontal_fov_deg", "Horizontal field of view (°)"),
+            ("vision", "vertical_fov_deg", "Vertical field of view (°)"),
+            ("vision", "minimum_tag_pixels", "Minimum tag side (pixels) — estimate"),
+            ("vision", "sample_hz", "Camera update rate (Hz) — estimate"),
+            ("vision", "latency_ms", "Camera delay (ms) — estimate"),
+        ],
         "Chassis": [
             ("robot", "mass_kg", "Robot mass (kg) — estimated"),
             ("robot", "wheel_diameter_mm", "Drive wheel diameter (mm)"),
@@ -1146,7 +1265,7 @@ class ModelSettings:
                 raise ValueError("Enter a valid number for " + key + ".") from None
         nonnegative = {"latency_ms", "position_noise_mm", "heading_noise_deg", "wall_min_distance_mm",
                        "traction_mu", "lateral_mu", "restitution", "turn_dropout_deg_s"}
-        signed = {"gps_x_mm", "gps_y_mm", "gps_heading_deg", "seed"}
+        signed = {"gps_x_mm", "gps_y_mm", "gps_heading_deg", "seed", "x_mm", "y_mm", "yaw_deg", "pitch_deg"}
         for (section, key) in self.values:
             value = result[section][key]
             if key not in signed and (value < 0 if key in nonnegative else value <= 0):

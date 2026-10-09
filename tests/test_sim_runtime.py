@@ -11,7 +11,7 @@ from simulator.config import default_config
 from simulator.runtime import _Runtime, build_vex_module, SimulatorSession
 
 
-PROGRAM = Path(__file__).resolve().parents[1] / "src" / "main.py"
+PROGRAM = Path(__file__).resolve().parents[1] / "examples" / "gps_centre_test.py"
 
 
 class SensorAndAdapterTests(unittest.TestCase):
