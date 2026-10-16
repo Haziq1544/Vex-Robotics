@@ -1,6 +1,6 @@
 # Project status
 
-Reviewed October 15, 2026. This is a dated snapshot, not a live Git report.
+Reviewed October 15, 2026. Branch names updated after the owner requested consolidation. This is a dated snapshot, not a live Git report.
 
 ## Working location
 
@@ -16,11 +16,11 @@ active development folder. Nothing from it was merged into this project.
 | Branch | Purpose/status at cleanup |
 | --- | --- |
 | `main` | `52694a9`: GPS drive-to-centre baseline and field editor/collisions. |
-| `sim_branch` | Also `52694a9`; its earlier changes were already merged into `main`. |
+| `sim_branch` (retired) | Identical to `main` at `52694a9`; duplicate local branch name removed. Its code remains in `main`. |
 | `game_element_detection` | `7ece873`: earlier AI Vision and GPS-search experiment. |
-| `sim_dev` | Active development; current working files saved as a checkpoint, followed by documentation cleanup. |
+| `testing/tag2-approach` | Active physical-testing branch, renamed from `sim_dev`; contains the approach checkpoint and documentation cleanup. |
 
-No branches were merged, deleted, or renamed during cleanup. Physical testing
+No code was merged during branch consolidation. The duplicate `sim_branch` name was removed and `sim_dev` was renamed to `testing/tag2-approach`. The older, different `game_element_detection` branch is preserved. Physical testing
 must be completed before deciding whether to merge development work.
 Use Git's current log/status for the latest commit IDs and remote synchronization.
 
