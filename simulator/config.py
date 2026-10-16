@@ -85,9 +85,9 @@ def validate_config(config):
     for key in ("left_mount_sign", "right_mount_sign"):
         if robot[key] not in (-1, 1):
             raise ValueError("robot." + key + " must be -1 or 1")
-    ports = [robot[key] for key in ("left_port", "right_port", "gps_port")]
-    if any(int(p) != p or p < 1 or p > 21 for p in ports) or len(set(ports)) != 3:
-        raise ValueError("Motor and GPS ports must be distinct integers from 1 to 21")
+    ports = [robot[key] for key in ("left_port", "right_port", "gps_port")] + [config["vision"]["port"]]
+    if any(int(p) != p or p < 1 or p > 21 for p in ports) or len(set(ports)) != 4:
+        raise ValueError("Motor, GPS and AI Vision ports must be distinct integers from 1 to 21")
     if robot["track_width_mm"] > robot["body_width_mm"]:
         raise ValueError("robot.track_width_mm cannot exceed the collision body width")
     if math.hypot(robot["body_length_mm"], robot["body_width_mm"]) >= min(field["width_mm"], field["height_mm"]):
@@ -105,6 +105,8 @@ def validate_config(config):
         raise ValueError("Vision fields of view must be less than 179 degrees")
     if vision["max_tag_angle_deg"] >= 90 or abs(vision["pitch_deg"]) >= 90:
         raise ValueError("Vision pitch and maximum tag angle must be below 90 degrees")
+    if abs(vision["tag_tilt_deg"]) >= 90:
+        raise ValueError("vision.tag_tilt_deg must be between -90 and 90 degrees, exclusive")
     if vision["near_mm"] >= vision["far_mm"]:
         raise ValueError("vision.near_mm must be less than vision.far_mm")
     from .field_elements import validate_layout

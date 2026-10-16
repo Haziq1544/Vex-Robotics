@@ -30,7 +30,7 @@ class SensorAndAdapterTests(unittest.TestCase):
     def test_incorrect_program_mount_is_not_silently_corrected(self):
         runtime = _Runtime(default_config(), {"x_mm": 0, "y_mm": 0, "heading_deg": 0}, "ideal")
         vex = build_vex_module(runtime)
-        gps = vex.__dict__["Gps"](18, 0, -53.34, vex.__dict__["MM"], 0)
+        gps = vex.__dict__["Gps"](vex.__dict__["Ports"].PORT18, 0, -53.34, vex.__dict__["MM"], 0)
         runtime.gps.update()
         self.assertAlmostEqual(gps.heading(), 180)
         self.assertGreater(abs(gps.y_position()), 100)
@@ -50,7 +50,7 @@ class SensorAndAdapterTests(unittest.TestCase):
     def test_motor_reversal_and_callable_accessors(self):
         runtime = _Runtime(default_config(), {"x_mm": 0, "y_mm": 0, "heading_deg": 0}, "ideal")
         vex = build_vex_module(runtime).__dict__
-        left, right = vex["Motor"](9), vex["Motor"](10, vex["GearSetting"].RATIO_18_1, True)
+        left, right = vex["Motor"](vex["Ports"].PORT10), vex["Motor"](vex["Ports"].PORT11, vex["GearSetting"].RATIO_18_1, True)
         for motor in (left, right):
             motor.spin(vex["FORWARD"], 50, vex["PERCENT"])
         runtime.world.step(.5)
@@ -91,7 +91,7 @@ class ProgramExecutionTests(unittest.TestCase):
     def test_program_failure_is_reported_and_braked(self):
         with tempfile.TemporaryDirectory() as directory:
             program = Path(directory) / "broken_robot.py"
-            program.write_text("from vex import *\nm=Motor(Ports.PORT9)\nm.spin(FORWARD,50,PERCENT)\n"
+            program.write_text("from vex import *\nm=Motor(Ports.PORT10)\nm.spin(FORWARD,50,PERCENT)\n"
                                "wait(100,MSEC)\nraise ValueError('intentional test error')\n")
             result = run_headless(default_config(), program, {"x_mm": 0, "y_mm": 0, "heading_deg": 0})
             self.assertEqual(result["result"]["reason"], "error")

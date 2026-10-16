@@ -40,6 +40,17 @@ def validation_source(mode="steer", gap=50):
 
 
 class VisionGeometryTests(unittest.TestCase):
+    def test_upright_tag_is_rectangular_when_faced_square_on(self):
+        goal = make_element("goal_neutral", element_id="upright_tag")
+        model = VisionModel(camera_world(y=-500, elements=[goal]), default_config()["vision"])
+        tag = model._observe()[0]
+        xs, ys = tag["corners_x"], tag["corners_y"]
+        self.assertEqual(xs[0], xs[3])
+        self.assertEqual(xs[1], xs[2])
+        self.assertEqual(ys[0], ys[1])
+        self.assertEqual(ys[2], ys[3])
+        self.assertGreater(tag["centerY"], 120, "An upright tag below the lens still appears below centre")
+
     def test_tags_have_projected_corners_and_only_facing_faces_are_seen(self):
         model = VisionModel(camera_world(), default_config()["vision"])
         tags = model._observe()
@@ -157,10 +168,16 @@ class VisionAdapterTests(unittest.TestCase):
 
     def test_camera_does_not_claim_existing_ports_or_unsupported_detection(self):
         camera_type = self.vex.__dict__["AiVision"]
-        for port in (9, 10, 18, 0, 22):
+        ports = self.vex.__dict__["Ports"]
+        for port in (ports.PORT10, ports.PORT11, ports.PORT18, -1, 21):
             with self.subTest(port=port), self.assertRaises(ValueError):
                 camera_type(port)
         camera = camera_type(None)
+        self.assertTrue(camera_type(ports.PORT17).installed())
+        # Numeric 17 is physical port18 in VEX, not the AI camera's port17.
+        self.assertEqual(int(ports.PORT17), 16)
+        with self.assertRaises(ValueError):
+            camera_type(17)
         with self.assertRaises(UnsupportedVexAPI):
             camera.set_tag_family(camera.TAG_36H11)
         with self.assertRaises(UnsupportedVexAPI):
@@ -173,10 +190,49 @@ class VisionAdapterTests(unittest.TestCase):
         namespace = {"__name__": "vision_validation"}
         with patch.dict(sys.modules, {"vex": self.vex}):
             exec(compile(PROGRAM.read_text(encoding="utf-8"), str(PROGRAM), "exec"), namespace)
+            namespace["AI_VISION_PORT"] = None
             namespace["run_test"]()
         self.assertEqual(namespace["run_status"], "Stopped: set AI_VISION_PORT")
         self.assertFalse(self.runtime.vision_used)
         self.assertTrue(all(command == {"percent": 0, "brake": "brake"} for command in self.runtime.world.commands))
+
+    def test_robot_wiring_and_test_measurements_match_physical_model(self):
+        namespace = {"__name__": "hardware_validation"}
+        with patch.dict(sys.modules, {"vex": self.vex}):
+            exec(compile(PROGRAM.read_text(encoding="utf-8"), str(PROGRAM), "exec"), namespace)
+        config = default_config()
+        for source, expected, section, key in (
+                ("LEFT_MOTOR_PORT", 10, "robot", "left_port"),
+                ("RIGHT_MOTOR_PORT", 11, "robot", "right_port"),
+                ("GPS_PORT", 18, "robot", "gps_port"),
+                ("AI_VISION_PORT", 17, "vision", "port")):
+            self.assertEqual(int(namespace[source]) + 1, expected)
+            self.assertEqual(config[section][key], expected)
+        for source, expected, section, key in (
+                ("GPS_X_OFFSET_MM", 101.6, "robot", "gps_x_mm"),
+                ("GPS_Y_OFFSET_MM", -162.56, "robot", "gps_y_mm"),
+                ("GPS_HEADING_OFFSET_DEG", 180, "robot", "gps_heading_deg"),
+                ("CAMERA_X_MM", 0, "vision", "x_mm"),
+                ("CAMERA_Y_MM", 139.7, "vision", "y_mm"),
+                ("CAMERA_HEIGHT_MM", 140, "vision", "height_mm"),
+                ("CAMERA_PITCH_DEG", 0, "vision", "pitch_deg"),
+                ("TAG_TILT_DEG", 0, "vision", "tag_tilt_deg")):
+            self.assertAlmostEqual(namespace[source], expected)
+            self.assertAlmostEqual(config[section][key], expected)
+
+    def test_robot_estimates_upright_goal_position_from_pixels(self):
+        namespace = {"__name__": "vision_validation"}
+        with patch.dict(sys.modules, {"vex": self.vex}):
+            exec(compile(PROGRAM.read_text(encoding="utf-8"), str(PROGRAM), "exec"), namespace)
+        goal = make_element("goal_neutral", element_id="upright_tag")
+        for x in (0, 50):
+            with self.subTest(lateral_position=x):
+                model = VisionModel(camera_world(x=x, y=-500, elements=[goal]), default_config()["vision"])
+                item = model._observe()[0]
+                gx, gy, polygon = namespace["observed_goal"](vex_object(item))
+                self.assertAlmostEqual(gx, -x, delta=15)
+                self.assertAlmostEqual(gy, 500, delta=15)
+                self.assertGreater(namespace["clearance"](polygon), 0)
 
     def test_pose_fit_accepts_different_corner_start_and_winding(self):
         namespace = {"__name__": "vision_validation"}
@@ -261,11 +317,13 @@ class VisionProgramTests(unittest.TestCase):
                     self.assertEqual(world["collision_count"], 0)
                     self.assertTrue(snapshot["braking_settled"])
                     self.assertLess(abs(world["v_mm_s"]), 1)
-                    # Square-on approaches to shorter goals lose the tag below
-                    # the estimated level camera before the requested gap.
-                    # Verify the real loss response instead of inventing vision.
-                    self.assertEqual(snapshot["status"], "Stopped: target lost")
-                    self.assertNotIn(tag_id, [item["id"] for item in snapshot["vision"]["objects"]])
+                    # At 140 mm, neutral goal tags stay visible through arrival;
+                    # the shorter alliance goals still leave the camera view.
+                    if kind == "goal_neutral":
+                        self.assertEqual(snapshot["status"], "Arrived: stopped before goal")
+                    else:
+                        self.assertEqual(snapshot["status"], "Stopped: target lost")
+                        self.assertNotIn(tag_id, [item["id"] for item in snapshot["vision"]["objects"]])
 
     def test_first_visible_noncentral_goal_wins_with_centre_tag_also_visible(self):
         config = default_config()

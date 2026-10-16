@@ -16,8 +16,8 @@ class ElementPhysicsTests(unittest.TestCase):
         return World(config, {"x_mm": 0, "y_mm": -700, "heading_deg": 0, **pose})
 
     def run_for(self, world, duration, left=100, right=100):
-        world.set_motor(9, {"percent": left, "brake": "brake"})
-        world.set_motor(10, {"percent": -right, "brake": "brake"})
+        world.set_motor(world.robot["left_port"], {"percent": left, "brake": "brake"})
+        world.set_motor(world.robot["right_port"], {"percent": -right, "brake": "brake"})
         touched = set()
         for _ in range(round(duration / 0.01)):
             world.step(0.01)
@@ -57,8 +57,8 @@ class ElementPhysicsTests(unittest.TestCase):
             with self.subTest(kind=kind):
                 obstacle = make_element(kind, element_id="fixed_obstacle")
                 world = self.world([obstacle])
-                world.set_motor(9, {"percent": 100})
-                world.set_motor(10, {"percent": -100})
+                world.set_motor(world.robot["left_port"], {"percent": 100})
+                world.set_motor(world.robot["right_port"], {"percent": -100})
                 touched = set()
                 stop_y = -element_spec(kind)["depth_mm"] / 2 - world.robot["body_length_mm"] / 2
                 for _ in range(150):
@@ -79,8 +79,8 @@ class ElementPhysicsTests(unittest.TestCase):
         loader = make_element("loader", x_mm=-half_width + element_spec("loader")["width_mm"] / 2,
                               element_id="wall_loader")
         world = self.world([loader], x_mm=-half_width + config["robot"]["body_width_mm"] / 2)
-        world.set_motor(9, {"percent": 100})
-        world.set_motor(10, {"percent": -100})
+        world.set_motor(world.robot["left_port"], {"percent": 100})
+        world.set_motor(world.robot["right_port"], {"percent": -100})
         touched = set()
         for _ in range(150):
             world.step(0.02)
@@ -110,8 +110,8 @@ class ElementPhysicsTests(unittest.TestCase):
         world = self.world([make_element("goal_center", element_id="goal")])
         world.vy = world.free_speed
         world.wheel_speed[:] = [world.free_speed, world.free_speed]
-        world.set_motor(9, {"percent": 100})
-        world.set_motor(10, {"percent": -100})
+        world.set_motor(world.robot["left_port"], {"percent": 100})
+        world.set_motor(world.robot["right_port"], {"percent": -100})
         world.step(1.0)
         self.assertIn("goal", world.collision_elements)
         self.assertLess(world.y_mm, -250)

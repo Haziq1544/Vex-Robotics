@@ -18,6 +18,11 @@ def describe_program(source, filename):
         return {"kind": "coordinate_target", "name": "Fixed coordinate navigation"}
     declared = assignments.get("PROGRAM_KIND")
     if isinstance(declared, ast.Constant) and declared.value == VISION_KIND:
+        mode = assignments.get("VISION_MODE")
+        if isinstance(mode, ast.Constant) and mode.value == "tag_centering":
+            return {"kind": VISION_KIND, "name": "AI Vision: detect and centre tag"}
+        if isinstance(mode, ast.Constant) and mode.value == "tag_approach":
+            return {"kind": VISION_KIND, "name": "AI Vision: calibrated Tag 2 approach"}
         return {"kind": VISION_KIND, "name": "AI Vision: first visible goal"}
     return {"kind": "custom", "name": "Custom program: " + Path(filename).name}
 

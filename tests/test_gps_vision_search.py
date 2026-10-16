@@ -21,7 +21,9 @@ class GpsVisionSearchTests(unittest.TestCase):
         goal = make_element("goal_neutral", 600, 500, element_id="behind_robot")
         goal["tag_id"] = 4
         config["layout"] = {"preset": "custom", "elements": [goal]}
-        pose = {"x_mm": 400, "y_mm": -300, "heading_deg": 180}
+        # At the measured 140 mm lens height, use an aligned approach so
+        # the chosen face stays visible after the search turn.
+        pose = {"x_mm": 600, "y_mm": -300, "heading_deg": 180}
         world = SimpleNamespace(**pose, time_s=0.0, elements=[goal])
         self.assertEqual(VisionModel(world, config["vision"])._observe(), [])
 

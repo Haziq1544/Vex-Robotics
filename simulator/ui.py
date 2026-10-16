@@ -537,10 +537,11 @@ class SimulatorApp:
         ttk.Label(parent, textvariable=self.vision_text, wraplength=280, style="Muted.TLabel").pack(anchor="w", pady=10)
         self.vision_loss_button = ttk.Button(parent, text="Hide tags for 1 second", command=self.inject_vision_loss)
         self.vision_loss_button.pack(fill="x", pady=(0, 10))
-        ttk.Label(parent, text="Start anywhere the robot fits. The first visible goal is selected; there is no fixed field target. "
-                  "With no visible tag, GPS guides one search turn. Leave room to turn and a clear approach path.",
+        ttk.Label(parent, text="Current test: centre, then approach Tag 2 in short steps. Other IDs only centre. "
+                  "Stopping uses a real-camera image-size sample; it is not a measured distance. No GPS search.",
                   style="Muted.TLabel", wraplength=280).pack(anchor="w", pady=(0, 10))
-        ttk.Label(parent, text="Camera port is virtual/unset. Mount and tag size are estimates; adjust them in Model settings. "
+        ttk.Label(parent, text="Test wiring: AI Vision17, GPS18, motors10/11. X/Y mounts use your test measurements. "
+                  "Camera height and tag size use your measurements. Adjust them in Model settings. "
                   "The lift stays at the PDF's pictured position.", style="Muted.TLabel", wraplength=280).pack(anchor="w")
 
     def inject_vision_loss(self):
@@ -1161,12 +1162,13 @@ class ModelSettings:
 
     FIELDS = {
         "AI Vision": [
-            ("vision", "x_mm", "Camera right offset (mm) — estimate"),
-            ("vision", "y_mm", "Camera forward offset (mm) — estimate"),
-            ("vision", "height_mm", "Camera height (mm) — estimate"),
+            ("vision", "x_mm", "Camera right offset (mm) — test measurement"),
+            ("vision", "y_mm", "Camera forward offset (mm) — test measurement"),
+            ("vision", "height_mm", "Camera lens height above floor (mm)"),
             ("vision", "yaw_deg", "Camera yaw: forward = 0°"),
             ("vision", "pitch_deg", "Camera pitch: up positive (°)"),
-            ("vision", "tag_size_mm", "Detection square size (mm) — estimate"),
+            ("vision", "tag_size_mm", "Detection square size (mm) — test measurement"),
+            ("vision", "tag_tilt_deg", "Tag tilt: vertical = 0°, top inward positive"),
             ("vision", "horizontal_fov_deg", "Horizontal field of view (°)"),
             ("vision", "vertical_fov_deg", "Vertical field of view (°)"),
             ("vision", "minimum_tag_pixels", "Minimum tag side (pixels) — estimate"),
@@ -1240,7 +1242,7 @@ class ModelSettings:
                 var = tk.StringVar(value=str(self.working[section][key]))
                 self.values[(section, key)] = var
                 ttk.Entry(tab, textvariable=var, width=13).grid(row=row, column=1, sticky="e", pady=6)
-        self.note = tk.StringVar(value="Motor ports 9 / 10 and GPS port 18 follow the project wiring.")
+        self.note = tk.StringVar(value="Test wiring: left10, right11, GPS18, AI Vision17. Offsets are from turning centre to lens.")
         ttk.Label(container, textvariable=self.note, style="Muted.TLabel", wraplength=610).pack(anchor="w", pady=10)
         actions = ttk.Frame(container)
         actions.pack(fill="x")
@@ -1265,7 +1267,7 @@ class ModelSettings:
                 raise ValueError("Enter a valid number for " + key + ".") from None
         nonnegative = {"latency_ms", "position_noise_mm", "heading_noise_deg", "wall_min_distance_mm",
                        "traction_mu", "lateral_mu", "restitution", "turn_dropout_deg_s"}
-        signed = {"gps_x_mm", "gps_y_mm", "gps_heading_deg", "seed", "x_mm", "y_mm", "yaw_deg", "pitch_deg"}
+        signed = {"gps_x_mm", "gps_y_mm", "gps_heading_deg", "seed", "x_mm", "y_mm", "yaw_deg", "pitch_deg", "tag_tilt_deg"}
         for (section, key) in self.values:
             value = result[section][key]
             if key not in signed and (value < 0 if key in nonnegative else value <= 0):

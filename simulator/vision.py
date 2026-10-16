@@ -4,7 +4,7 @@ VEX AI Vision reports 320x240 images and a 74x63 degree field of view. Four
 tagged faces on each goal are projected through an ideal pinhole lens. Finite
 range, small tags, back faces, clipping and intervening goal/loader bodies can
 prevent detection. Lens distortion, lighting and actual decoder errors need
-hardware calibration. Camera mount and printed tag size are editable estimates.
+hardware calibration. Camera mount and tag geometry are editable settings.
 """
 from collections import deque
 from copy import deepcopy
@@ -87,9 +87,10 @@ class VisionModel:
         position = pose[0]
         objects = []
         size = self.config["tag_size_mm"]
-        tilt = math.atan((71.25 - 44.4) / (82.5 - 10))
+        tilt = math.radians(self.config["tag_tilt_deg"])
         # Alliance goal upper part is shared with pedestal-mounted neutral goals.
-        face_offset = 71.25 - (37.8 - 10) * math.tan(tilt)
+        # Retain the estimated tag centre on the goal independently of its tilt.
+        face_offset = 71.25 - (37.8 - 10) * (71.25 - 44.4) / (82.5 - 10)
         occluders = [(e, element_polygon(e), element_spec(e["kind"])["height_mm"])
                      for e in self.world.elements]
         for element in self.world.elements:

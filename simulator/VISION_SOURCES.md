@@ -1,7 +1,11 @@
 # AI Vision test: measurements and limits
 
-The active `src/main.py` uses VEX AI Vision AprilTag observations to
-approach the first visible scoring goal. The simulator supplies the same
+The active `src/main.py` confirms and centres an AprilTag, then approaches
+calibrated Tag 2 in short steps using its observed image size to stop.
+It does not estimate distance or use GPS. The verified centring-only baseline
+is preserved in `examples/vision_centering_test.py`.
+The earlier geometry-based approach experiment described below is archived in
+`examples/vision_approach_test.py`. The simulator supplies the same
 pixel-based observations through its VEX adapter. The robot program receives
 no simulator coordinates, goal names, or hidden distances.
 
@@ -25,16 +29,18 @@ pins and cups rather than scoring goals.
 
 The supplied `flex_sensors_build_instructions.pdf`, pages 22–25, places the
 camera on the forward-facing claw/lift assembly. With the user's approval,
-the pictured lift pose is held fixed and the following editable estimates are
-used. The PDF does not dimension the camera relative to the drivetrain.
+the pictured lift pose is held fixed. The user has since supplied the temporary
+X/Y lens offsets below, measured from the drivetrain turning centre, and a
+135.2 mm lens height above the floor with the camera facing forward and level.
 
 | Setting | Value | Status |
 | --- | ---: | --- |
-| Right offset from turning centre | 0 mm | PDF estimate |
-| Forward offset | 140 mm | PDF estimate |
-| Camera height above floor | 180 mm | PDF estimate |
-| Yaw / pitch | 0 / 0 degrees | Forward, level estimate |
-| Detection-square side | 25 mm | Provisional; measure the detected square, not the sticker |
+| Right offset from turning centre | 0 mm | User test measurement |
+| Forward offset | 139.7 mm (5.5 inches) | User test measurement |
+| Camera height above floor | 135.2 mm (13.52 cm) | Latest user test measurement |
+| Yaw / pitch | 0 / 0 degrees | User reports forward and level |
+| Detection-square side | 50 mm (5 cm) | User test measurement; 5 x 5 cm tag |
+| Tag tilt from vertical | 0 degrees | User reports upright, non-sloping tags |
 | Update rate / delay | 20 Hz / 50 ms | Tunable model assumptions |
 | Range limits | 50–2500 mm | Tunable assumptions |
 | Minimum projected tag side | 4 pixels | Optimistic geometric threshold, not a reliable decoding specification |
@@ -50,8 +56,12 @@ The [official goal drawing](https://content.vexrobotics.com/docs/2026-2027/overr
 shows four tagged faces, a common upper part 82.5 mm high, base flats 142.5 mm
 apart, top flats 88.8 mm apart, and tag centres 37.8 mm above the upper part's
 base. With the neutral pedestals, tag heights are 178.0 mm for ID 0, 101.8 mm
-for IDs 1 and 4, and 37.8 mm for IDs 2 and 3. The model derives the panel slope
-and horizontal tag offset from those dimensions. The drawing does not give
+for IDs 1 and 4, and 37.8 mm for IDs 2 and 3. The estimated horizontal tag-centre
+offset remains derived from those dimensions, independently of tag orientation.
+The user reports that the tag face stands vertically, so both the simulator's
+`vision.tag_tilt_deg` and the robot's `TAG_TILT_DEG` now default to 0 rather than
+assuming the tag follows the tapered goal body. Positive tilt tips the top inward.
+Tag-centre heights and offsets still need physical verification. The drawing does not give
 the detection-square size. See [FIELD_SOURCES.md](FIELD_SOURCES.md) for goal
 footprints and placement. Loaders block sightlines but have no simulated tags.
 
@@ -71,12 +81,28 @@ blur, print damage, lift movement, or robot mechanism occlusion is modeled.
 A synthetic four-pixel detection does not imply that real hardware can read
 that tag at the same distance.
 
-## Approach and stopping
+## Archived approach and stopping experiment
+
+If the first camera frames contain no goal tag, the robot calibrates its GPS on
+port 18 while braked, then performs one slow clockwise turn at 8% power. GPS
+heading measures signed angular progress, including wraparound; X/Y detect
+unwanted drift and check a full-chassis swept circle against field walls.
+This does not infer the position of unseen goals or choose the field centre.
+AI Vision keeps checking during the search, and its first goal tag triggers
+braking of the search turn and a transition to approach.
+
+A sweep ends after360° without a tag or 25 seconds including GPS startup. It
+also ends on stalled rotation, more than 75 mm position drift, invalid heading
+jumps, or insufficient wall clearance. GPS loss brakes immediately on the next
+control sample and allows up to 2 seconds for a stable fix. Recovery preserves
+the accumulated sweep. The robot does not drive forward during search; nearby
+unseen obstacles can still intersect its rotating corners. These limits are
+editable robot-code settings, and field/chassis dimensions require calibration.
 
 The first nonempty snapshot selects its widest goal tag. The program tracks
 that ID using nearby image position and similar apparent size. IDs repeat
 across goals and their faces, so they are not unique physical identities.
-Ambiguous or missing matches stop the run; they do not trigger a search or
+After acquisition, ambiguous or missing matches stop the run; they do not trigger a search or
 switch to a new ID. Closely overlapping identical tags can still be confused.
 
 Distance is estimated from tag corners, known upright goal geometry and camera
@@ -101,18 +127,40 @@ path to a farther visible tag. Use a clear approach corridor when testing this
 controller. Collision bodies remain active; the simulator does not let the
 robot pass through anchored goals or loaders.
 
-With the estimated level camera at 180 mm high, lower tags can pass below the
+With the user-supplied level camera at 135.2 mm high, lower tags can pass below the
 vertical field of view before the requested 50 mm gap. In those cases the robot
 approaches the correct goal but brakes early with `Stopped: target lost`.
 The camera/lift geometry needs calibration before expecting the requested gap
 at every goal. The simulator does not invent observations after a tag disappears.
 
+The user confirmed that the real camera loses the low goal tag at a 50 mm
+front clearance. The new camera-only approach uses the user's Tag 2 reading:
+13 x 14 pixels, centre (168, 224), at about 240 mm front clearance, the minimum
+full-tag visibility distance. It brakes at width >=12 OR height >=13 pixels,
+with a one-pixel margin, or when a tag is within 8 pixels of an image edge.
+Only Tag 2 has a stop sample; other IDs centre without driving forward.
+Steps use 6% power for a nominal 100 ms, then brake at least 150 ms and reconfirm
+centring. Image loss after the first step ends the run instead of switching goals.
+This is a visual stop threshold, not an exact millimetre clearance. The simulator
+uses the same threshold but may stop at a different gap because the ideal
+geometric projection has not been matched to the measured hardware pixel size.
+The reported tag top is roughly 70 mm above the goal base, which is not a
+tag-centre height measurement and has not replaced the per-goal tag geometry.
+The archived approach source retains its earlier calibration settings.
+
 ## Transfer to the physical robot
 
-`AI_VISION_PORT = None` represents a virtual camera only in the simulator. On a
-real Brain, this setting stops the program before it drives. Set it to the
-actual `Ports.PORTx` after wiring is known. Motor ports 9 and 10 and GPS port
-18 are reserved and unchanged.
+Current test wiring: left motor **Ports.PORT10**, right motor **Ports.PORT11**,
+GPS **Ports.PORT18**, AI Vision **Ports.PORT17**. VEX internally numbers these
+enum values from zero; the literal 17 would mean physical port 18. The simulator
+now follows those SDK semantics and translates to printed port numbers only
+inside its physical model. Configuration JSON stores printed numbers 10/11/18/17.
+An unset camera port is still allowed only in virtual tests and blocks real
+robot motion. Missing drive motors also stop startup.
+
+GPS lens offsets are **X +101.6 mm, Y −162.56 mm**, with its rear-facing180°
+heading offset confirmed by the user. Camera X/Y are **0/+139.7 mm**. These are
+temporary test measurements, applied to both robot and simulated hardware.
 
 Measure the tag square, fixed lift/camera pose and chassis envelope, set the
 same calibration in the robot test, and verify tag corner readings, execution
@@ -121,6 +169,9 @@ validated on hardware. Other obstacles and an extended claw can require more
 clearance than the current chassis rectangle models.
 
 The VEX project uploads `src/main.py`; all normal simulator launches use that
-same source. Set the real camera port and measured calibration before hardware
-use. The previous GPS centre test is archived at `examples/gps_centre_test.py`.
+same source. The hardware API calls are checked against the installed V5 SDK.
+The pose solver's execution time on the real Brain and the actual stopping
+distance remain unmeasured; passing the simulator is not a hardware validation.
+The previous GPS centre test is archived at `examples/gps_centre_test.py` and
+uses the same updated wiring when explicitly selected.
 The simulator package is desktop-only and is not part of the robot program.

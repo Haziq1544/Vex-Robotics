@@ -10,13 +10,13 @@
     "mass_kg": 6.5,
     "motor_free_rpm": 200.0,
     "motor_stall_torque_nm": 1.05,
-    "left_port": 9,
-    "right_port": 10,
+    "left_port": 10,
+    "right_port": 11,
     "left_mount_sign": 1,
     "right_mount_sign": -1,
     "gps_port": 18,
-    "gps_x_mm": 0.0,
-    "gps_y_mm": -53.34,
+    "gps_x_mm": 101.6,
+    "gps_y_mm": -162.56,
     "gps_heading_deg": 180.0
   },
   "physics": {
@@ -42,14 +42,16 @@
     "wall_min_distance_mm": 100.0
   },
   "vision": {
+    "port": 17,
     "x_mm": 0.0,
-    "y_mm": 140.0,
-    "height_mm": 180.0,
+    "y_mm": 139.7,
+    "height_mm": 135.2,
     "yaw_deg": 0.0,
     "pitch_deg": 0.0,
     "horizontal_fov_deg": 74.0,
     "vertical_fov_deg": 63.0,
-    "tag_size_mm": 25.0,
+    "tag_size_mm": 50.0,
+    "tag_tilt_deg": 0.0,
     "sample_hz": 20.0,
     "latency_ms": 50.0,
     "near_mm": 50.0,
@@ -65,9 +67,10 @@
     "Green 200 RPM is specified by VEX. 1.05 Nm is an ideal gear-ratio estimate from the documented 2.1 Nm red100 RPM stall torque.",
     "All friction, motor response, wheel inertia, GPS noise/delay/dropout settings are tunable approximations, not measured VEX specifications.",
     "Robot collision shape is a fixed rectangle centered at the drive turning center; raised/folded mechanisms are not separately simulated.",
-    "Physical GPS mount is independent of Gps(...) code offsets: wrong code offsets produce biased simulated readings. Ports remain 9, 10 and 18.",
-    "AI Vision mount estimates from Flex sensor build pp22-25: centered, 140 mm forward, 180 mm high, facing forward with fixed lift pose. Measure before physical testing.",
-    "AI Vision uses official 320x240 and 74x63 degree FOV. Tag detection square size 25 mm, rate, latency, angle, range and pixel thresholds are provisional; calibrate against the real camera.",
-    "Physical camera settings are independent of src/main.py calibration; update both for a matched model. The real AI Vision port is deliberately unset."
+    "Temporary user test measurements: GPS x +101.6 mm, y -162.56 mm. Motor ports left10/right11, GPS18 and AI Vision17. Physical and programmed offsets remain independent.",
+    "AI Vision test measurements from user: centered, 139.7 mm forward, lens 135.2 mm above floor, facing forward and level. Keep the lift in this measured pose.",
+    "User reports upright tags: tag tilt 0 degrees from vertical. Tag centre positions retain the existing goal geometry estimates.",
+    "AI Vision uses official 320x240 and 74x63 degree FOV. User reports 50 x 50 mm tags. Rate, latency, angle, range and pixel thresholds remain provisional; calibrate against the real camera.",
+    "Physical camera settings are independent of src/main.py calibration; update both for a matched model. Real AI Vision test port is17."
   ]
 }

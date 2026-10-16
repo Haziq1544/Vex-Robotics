@@ -15,8 +15,8 @@ class PhysicsTests(unittest.TestCase):
         return World(default_config(), {"x_mm": 0, "y_mm": 0, "heading_deg": 0, **pose})
 
     def drive(self, world, left, right):
-        world.set_motor(9, {"percent": left, "brake": "brake"})
-        world.set_motor(10, {"percent": -right, "brake": "brake"})
+        world.set_motor(world.robot["left_port"], {"percent": left, "brake": "brake"})
+        world.set_motor(world.robot["right_port"], {"percent": -right, "brake": "brake"})
 
     def run_for(self, world, duration):
         for _ in range(round(duration / 0.01)):
@@ -53,8 +53,8 @@ class PhysicsTests(unittest.TestCase):
 
     def test_motor_reversal_mistake_is_visible(self):
         world = self.world()
-        world.set_motor(9, {"percent": 30})
-        world.set_motor(10, {"percent": 30})
+        world.set_motor(world.robot["left_port"], {"percent": 30})
+        world.set_motor(world.robot["right_port"], {"percent": 30})
         self.run_for(world, 1)
         self.assertLess(abs(world.x_mm) + abs(world.y_mm), 0.1)
         self.assertGreater(world.heading_deg, 30)
@@ -66,7 +66,7 @@ class PhysicsTests(unittest.TestCase):
             self.drive(world, 50, 50)
             self.run_for(world, 1)
             start = world.y_mm
-            for port in (9, 10):
+            for port in (world.robot["left_port"], world.robot["right_port"]):
                 world.set_motor(port, {"percent": 0, "brake": mode})
             self.run_for(world, 1)
             distances.append(world.y_mm - start)
@@ -124,7 +124,7 @@ class PhysicsTests(unittest.TestCase):
     def test_invalid_configuration_and_start_rejected(self):
         for section, name, value in (("robot", "mass_kg", 0), ("robot", "wheel_diameter_mm", -2),
                                      ("physics", "restitution", 2), ("gps", "sample_hz", float("nan")),
-                                     ("simulation", "step_ms", 100), ("robot", "left_port", 10)):
+                                     ("simulation", "step_ms", 100), ("robot", "left_port", 11)):
             config = default_config()
             config[section][name] = value
             with self.assertRaises(ValueError):
@@ -132,7 +132,7 @@ class PhysicsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.world(x_mm=1780)
         with self.assertRaises(NotImplementedError):
-            self.world().set_motor(11, {"percent": 20})
+            self.world().set_motor(12, {"percent": 20})
 
     def test_partial_override_load_and_independent_defaults(self):
         first = default_config()
@@ -143,7 +143,7 @@ class PhysicsTests(unittest.TestCase):
             path.write_text(json.dumps({"robot": {"mass_kg": 8.3}}), encoding="utf-8")
             loaded = load_config(path)
             self.assertEqual(loaded["robot"]["mass_kg"], 8.3)
-            self.assertEqual(loaded["robot"]["left_port"], 9)
+            self.assertEqual(loaded["robot"]["left_port"], 10)
             path.write_text('{"robot": {"mass_kgg": 8.3}}', encoding="utf-8")
             with self.assertRaises(ValueError):
                 load_config(path)

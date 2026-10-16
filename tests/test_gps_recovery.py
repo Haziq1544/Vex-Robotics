@@ -52,7 +52,7 @@ class Sim:
                 timer=SimpleNamespace(time=lambda units: self.now)),
             "Motor": Motor, "Gps": Gps,
             "GearSetting": SimpleNamespace(RATIO_18_1=18),
-            "Ports": SimpleNamespace(PORT9=9, PORT10=10, PORT18=18),
+            "Ports": SimpleNamespace(PORT10=10, PORT11=11, PORT18=18),
             "MM": "mm", "MSEC": "ms", "BRAKE": "brake",
             "FORWARD": "forward", "REVERSE": "reverse", "PERCENT": "%",
             "wait": self.wait, "math": math, "print": lambda *args: None,
@@ -96,7 +96,7 @@ class GpsRecoveryTests(unittest.TestCase):
                            ((0, -300, 0) if t < 1500 else (0, 0, 0)))
         self.assertEqual(sim.run(), "Arrived at centre")
         self.assertTrue(sim.spins(500, 600))
-        self.assertIn((600, "stop", 9), sim.events)
+        self.assertIn((600, "stop", 11), sim.events)
         self.assertIn((600, "stop", 10), sim.events)
         self.assertFalse(sim.spins(600, 1300))
         resumed = sim.spins(1300, 1320)

@@ -22,13 +22,13 @@ Choose a starting position and heading, then press **Run**. Positions are in mil
 - **Stop**, edit and save `src/main.py`, then **Run** to load your changes.
 - Read the simulated Brain screen and console for the program's status and errors.
 
-The current robot program begins moving when it sees its first goal tag. With no visible goal, it waits. It brakes on arrival or loss of the tracked tag, and keeps the final display visible.
+The active camera test confirms and centres a visible tag, then approaches **Tag 2 only** at 6% power in nominal 100 ms steps, braking at least 150 ms between steps. Other IDs centre and hold. It ends on a width of 12 pixels or height of 13 pixels, using a one-pixel margin before the user's 13 x 14 pixel reading at about 240 mm front clearance. That is a visual threshold, not a guaranteed distance. The geometric simulator may stop at a different gap from real hardware. Tag loss after forward motion, an image-edge guard, stale data, or a timeout also stops the run. No GPS search or distance calculation is used. The centring-only baseline is saved in `examples/vision_centering_test.py`; the old pose-based experiment remains in `examples/vision_approach_test.py`.
 
 ## GPS and robot settings
 
 Use **ideal** GPS to check route logic with clean measurements. Use **realistic** GPS to explore the effects of measurement delay, noise and temporary loss of a position fix. These are illustrative sensor models, not a prediction of exactly when your physical sensor will lose its field-code view.
 
-The simulator's **physical GPS mounting position** is independent of the offsets in robot code. The archived `examples/gps_centre_test.py` exercises GPS; the active vision program does not use GPS for targeting. Deliberate differences between physical and configured offsets let you test a biased GPS reading.
+The simulator's **physical GPS mounting position** is independent of the offsets in robot code. The active camera approach test does not use GPS. The archived approach experiment uses GPS heading for a search sweep and X/Y for drift and wall clearance. Deliberate differences between physical and configured offsets let you test a biased GPS reading with that archived program.
 
 **Model settings** includes AI Vision, Chassis, GPS, Field & engine, and Physics tabs. Save JSON preserves your measured configuration; load it in the dialog or start with `python simulate.py --config flex-model.json`. Use the Controls sidebar scrollbar to reach all telemetry on smaller screens. The dashed robot outline is its collision footprint; the GPS cone is a schematic illustration, not a calibrated camera field of view.
 
@@ -108,14 +108,27 @@ The example Override start is `(1400, -1200)` mm, heading `270°`, facing an
 off-centre neutral goal. Drag the robot or enter any valid starting position
 and heading in Controls. Run preserves that pose. The program does not receive
 this example coordinate or a designated goal: it follows the first visible tag.
-It does not plan routes around intervening objects. No target means no motion;
-losing an acquired target brakes and ends the test rather than searching.
+It does not plan routes around intervening objects. No initial tag triggers a
+GPS-guided search; losing an acquired target brakes and ends the test.
+The search needs room for the chassis corners to swing. It checks field-wall
+clearance from GPS but cannot detect an unseen nearby goal or loader.
+
+The search turns clockwise at 8% motor power and measures signed heading changes
+across the 359°/0° boundary. It stops after one full sweep without a detection,
+a 25-second search deadline, excessive position drift, or a stalled turn.
+On GPS loss it brakes, allows up to two seconds for a stable fix, and resumes
+the same sweep. Approach has its own 30-second deadline. Search progress and
+the locked tag ID appear in the Vision tab and simulated Brain display.
 
 The user-selected `STOP_CLEARANCE_MM` is **50 mm** from the chassis to the goal.
 Lower tags can leave the estimated camera's view before that gap is reached;
 the robot brakes early on loss rather than continuing without a target.
-`AI_VISION_PORT` stays unset until the real wiring is known. Only the simulator
-accepts an unset virtual camera port.
+Test wiring is now left motor 10, right motor 11, GPS 18 and AI Vision 17. The user
+measured GPS X/Y as **+101.6/−162.56 mm** and AI Vision X/Y as **0/+139.7 mm**,
+from the turning centre to each lens. GPS is rear-facing with a 180° offset.
+The simulated physical mount and robot-code calibration both use these values.
+Old saved model JSON may still contain earlier wiring/offsets; update it or
+load defaults before comparing a run with this hardware configuration.
 
 The camera mount follows editable estimates from the Flex sensor PDF, with
 the lift held in its pictured pose. Set the simulated physical mount in **Model

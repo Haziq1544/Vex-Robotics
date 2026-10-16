@@ -273,7 +273,13 @@ def build_vex_module(runtime):
         RATIO_18_1 = 200
         RATIO_6_1 = 600
 
-    Ports = IntEnum("Ports", {"PORT%d" % n: n for n in range(1, 22)})
+    # VEX SDK enum values are zero-based; model/config ports are printed 1..21.
+    Ports = IntEnum("Ports", {"PORT%d" % n: n - 1 for n in range(1, 22)})
+
+    def physical_port(port):
+        if isinstance(port, bool) or not isinstance(port, int) or not 0 <= port <= 20:
+            raise ValueError("Use a VEX Ports.PORT1 .. Ports.PORT21 constant")
+        return int(port) + 1
 
     def wait(duration, units=Units.MSEC):
         if units not in (Units.MSEC, Units.SEC):
@@ -327,7 +333,7 @@ def build_vex_module(runtime):
 
     class Motor:
         def __init__(self, port, gears=GearSetting.RATIO_18_1, reverse=False):
-            self.port = int(port)
+            self.port = physical_port(port)
             if self.port not in (runtime.config["robot"]["left_port"], runtime.config["robot"]["right_port"]):
                 raise UnsupportedVexAPI("Motor on port %s has no physical model. Add it to the simulator first." % port)
             self.gears, self.reverse = gears, bool(reverse)
@@ -380,7 +386,7 @@ def build_vex_module(runtime):
 
     class Gps:
         def __init__(self, port, origin_x=0, origin_y=0, units=Units.MM, heading_offset=0):
-            if int(port) != runtime.config["robot"]["gps_port"]:
+            if physical_port(port) != runtime.config["robot"]["gps_port"]:
                 raise UnsupportedVexAPI("No GPS model on port %s (physical GPS port is %s)." %
                                         (port, runtime.config["robot"]["gps_port"]))
             factor = 25.4 if units == Units.INCHES else 1
@@ -426,10 +432,12 @@ def build_vex_module(runtime):
 
         def __init__(self, port, *signatures):
             if port is not None:
-                if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 21:
-                    raise ValueError("AI Vision port must be a Smart Port or None for the virtual camera")
-                if port in (runtime.config["robot"]["left_port"], runtime.config["robot"]["right_port"], runtime.config["robot"]["gps_port"]):
+                printed_port = physical_port(port)
+                if printed_port in (runtime.config["robot"]["left_port"], runtime.config["robot"]["right_port"], runtime.config["robot"]["gps_port"]):
                     raise ValueError("AI Vision port conflicts with existing motor/GPS wiring")
+                if printed_port != runtime.config["vision"]["port"]:
+                    raise UnsupportedVexAPI("No AI Vision model on port %s (physical camera port is %s)." %
+                                            (printed_port, runtime.config["vision"]["port"]))
             if any(not isinstance(signature, Tagdesc) for signature in signatures):
                 raise UnsupportedVexAPI("AI Vision simulation currently supports AprilTags only")
             runtime.vision_used = True
