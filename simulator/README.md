@@ -105,37 +105,27 @@ normal launches refuse it with an explicit message instead of driving to centre
 under a vision label. Reload the intended saved source before running.
 
 The example Override start is `(1400, -1200)` mm, heading `270°`, facing an
-off-centre neutral goal. Drag the robot or enter any valid starting position
-and heading in Controls. Run preserves that pose. The program does not receive
-this example coordinate or a designated goal: it follows the first visible tag.
-It does not plan routes around intervening objects. No initial tag triggers a
-GPS-guided search; losing an acquired target brakes and ends the test.
-The search needs room for the chassis corners to swing. It checks field-wall
-clearance from GPS but cannot detect an unseen nearby goal or loader.
+off-centre neutral goal (Tag 4). That default demonstrates detection and centring;
+it does **not** demonstrate forward approach, which is enabled only for Tag 2.
+Choose a valid starting pose facing a Tag 2 goal to inspect the current approach.
+Run preserves your chosen pose. There is no fixed field-coordinate target or
+route planning. With no visible tag, the current program waits stationary.
 
-The search turns clockwise at 8% motor power and measures signed heading changes
-across the 359°/0° boundary. It stops after one full sweep without a detection,
-a 25-second search deadline, excessive position drift, or a stalled turn.
-On GPS loss it brakes, allows up to two seconds for a stable fix, and resumes
-the same sweep. Approach has its own 30-second deadline. Search progress and
-the locked tag ID appear in the Vision tab and simulated Brain display.
+The active program uses the camera-only behaviour described above. The earlier
+GPS-guided search and geometric 50 mm stopping-gap experiment is preserved in
+`examples/vision_approach_test.py`; it is not executed by normal launches.
+See [vision measurements and archived experiment](VISION_SOURCES.md) for details.
 
-The user-selected `STOP_CLEARANCE_MM` is **50 mm** from the chassis to the goal.
-Lower tags can leave the estimated camera's view before that gap is reached;
-the robot brakes early on loss rather than continuing without a target.
-Test wiring is now left motor 10, right motor 11, GPS 18 and AI Vision 17. The user
-measured GPS X/Y as **+101.6/−162.56 mm** and AI Vision X/Y as **0/+139.7 mm**,
-from the turning centre to each lens. GPS is rear-facing with a 180° offset.
-The simulated physical mount and robot-code calibration both use these values.
-Old saved model JSON may still contain earlier wiring/offsets; update it or
-load defaults before comparing a run with this hardware configuration.
+Current wiring is left motor 10, right motor 11, GPS 18, AI Vision 17. GPS model
+offsets are **+101.6/−162.56 mm** with a rear-facing 180° heading offset. Camera
+offsets are **0/+139.7 mm**, with lens height **135.2 mm**, forward and level.
+Offsets are measured from the drivetrain turning centre. The active program
+does not use GPS or a geometric distance estimate. Old saved model JSON and
+archived programs may retain earlier settings; review them before comparison.
 
-The camera mount follows editable estimates from the Flex sensor PDF, with
-the lift held in its pictured pose. Set the simulated physical mount in **Model
-settings → AI Vision**, and keep matching calibration constants in the robot
-test when modelling a correctly calibrated camera. Changing one does not
-silently change the other. See [VISION_SOURCES.md](VISION_SOURCES.md) for
-measurements, synthetic detection limits and hardware transfer instructions.
+The same image-size threshold runs on hardware and in simulation, but the
+geometric camera model has not been fitted to the real 13 × 14 pixel reading.
+A simulated stop may therefore occur at a different front clearance.
 
 On normal completion, the simulator advances braking physics for up to one
 additional second. The final position and collision count include that travel;
@@ -171,4 +161,4 @@ The VEX compatibility layer implements the APIs needed by the project, rather th
 
 Currently supported: `Brain` text screen and timer, `Motor` construction/spin/stop/velocity/position, `Gps` mounting/position/heading/quality/calibration, the AprilTag subset of `AiVision` with `Tagdesc`, cooperative `Thread`/`wait`, and basic autonomous `Competition` registration. Additional sensors, motor mechanisms, and drivetrain convenience classes need models before programs using those APIs can run. A program loop must call `wait()` regularly; a busy loop without it is reported instead of freezing the desktop window.
 
-For model provenance, equations and calibration limits, read [PHYSICS_SOURCES.md](PHYSICS_SOURCES.md). Run the checks with `python -m unittest discover -s tests -v` from the project root.
+For model provenance, equations and calibration limits, read [PHYSICS_SOURCES.md](PHYSICS_SOURCES.md). Before running checks, read [current test status](../tests/README.md): several controller expectations still describe the archived experiment.
