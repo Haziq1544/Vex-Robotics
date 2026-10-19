@@ -13,13 +13,10 @@ RIGHT_REVERSED = True
 left_motor = Motor(Ports.PORT9, DRIVE_CARTRIDGE, LEFT_REVERSED)
 right_motor = Motor(Ports.PORT10, DRIVE_CARTRIDGE, RIGHT_REVERSED)
 
-# Flex sensor build, pages 2-7: GPS is centred on the rear uprights and
-# faces backward. Robot forward is toward the claw.
-# Offsets are relative to the turning centre: right +X, forward +Y.
-GPS_X_OFFSET_MM = 0
-# The PDF gives no fore-aft dimension. Retain the existing 2.1-inch estimate;
-# verify the horizontal distance from the turning centre to the GPS centre.
-GPS_Y_OFFSET_MM = -53.34
+# User-measured turning-centre-to-lens offsets: right +X, forward +Y.
+# GPS faces backward; robot forward is toward the claw.
+GPS_X_OFFSET_MM = 101.6  # 4 inches right.
+GPS_Y_OFFSET_MM = -162.56  # 6.4 inches back.
 GPS_HEADING_OFFSET_DEG = 180  # Rear-facing GPS; report the robot's forward heading.
 GPS_MOUNT_CONFIGURED = True
 gps = Gps(Ports.PORT18, GPS_X_OFFSET_MM, GPS_Y_OFFSET_MM,

@@ -15,8 +15,8 @@
     "left_mount_sign": 1,
     "right_mount_sign": -1,
     "gps_port": 18,
-    "gps_x_mm": 0.0,
-    "gps_y_mm": -53.34,
+    "gps_x_mm": 101.6,
+    "gps_y_mm": -162.56,
     "gps_heading_deg": 180.0
   },
   "physics": {
