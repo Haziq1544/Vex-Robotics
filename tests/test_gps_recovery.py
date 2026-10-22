@@ -18,6 +18,9 @@ class Sim:
             def __init__(motor, port, *args):
                 motor.port = port
 
+            def installed(motor):
+                return True
+
             def stop(motor, mode):
                 self.events.append((self.now, "stop", motor.port))
 
@@ -84,14 +87,14 @@ class Sim:
 
 class GpsRecoveryTests(unittest.TestCase):
     def test_lock_requires_uninterrupted_good_readings(self):
-        sim = Sim(quality=lambda t: 100 if 100 <= t < 300 or t >= 320 else 90)
+        sim = Sim(quality=lambda t: 100 if 100 <= t < 300 or t >= 320 else 80)
         self.assertIsNotNone(sim.env["wait_for_gps_lock"](2000))
         self.assertEqual(sim.now, 820)
         self.assertFalse(sim.spins())
 
     def test_transient_loss_brakes_then_uses_recovered_pose(self):
         sim = Sim(
-            quality=lambda t: 90 if 600 <= t < 800 else 100,
+            quality=lambda t: 80 if 600 <= t < 800 else 100,
             pose=lambda t: (0, -1000, 90) if t < 800 else
                            ((0, -300, 0) if t < 1500 else (0, 0, 0)))
         self.assertEqual(sim.run(), "Arrived at centre")
@@ -104,14 +107,14 @@ class GpsRecoveryTests(unittest.TestCase):
         self.assertTrue(all(e[3] == "forward" for e in resumed))
 
     def test_permanent_loss_times_out_while_braked(self):
-        sim = Sim(quality=lambda t: 100 if t < 600 else 90)
+        sim = Sim(quality=lambda t: 100 if t < 600 else 80)
         self.assertEqual(sim.run(), "Stopped: GPS recovery timed out")
         self.assertEqual(sim.now, 2600)
         self.assertFalse(sim.spins(600))
         self.assertEqual([e[1] for e in sim.events[-2:]], ["stop", "stop"])
 
     def test_recovery_respects_overall_deadline(self):
-        sim = Sim(quality=lambda t: 100 if t < 1400 else 90)
+        sim = Sim(quality=lambda t: 100 if t < 1400 else 80)
         sim.env["RUN_TIMEOUT_MS"] = 1000
         self.assertEqual(sim.run(), "Stopped: run timed out")
         self.assertEqual(sim.now, 1500)  # Initial 500 ms lock + 1000 ms run.
@@ -119,23 +122,27 @@ class GpsRecoveryTests(unittest.TestCase):
 
     def test_loss_resets_arrival_confirmation(self):
         sim = Sim(pose=lambda t: (0, 0, 0),
-                  quality=lambda t: 90 if 600 <= t < 800 else 100)
+                  quality=lambda t: 80 if 600 <= t < 800 else 100)
         self.assertEqual(sim.run(), "Arrived at centre")
         self.assertEqual(sim.now, 1800)  # Recovered at 1300; settle another 500.
         self.assertFalse(sim.spins())
 
     def test_recovery_resets_progress_clock(self):
-        sim = Sim(quality=lambda t: 90 if 3000 <= t < 3100 else 100,
+        sim = Sim(quality=lambda t: 80 if 3000 <= t < 3100 else 100,
                   pose=lambda t: (0, -1000, 90) if t < 3700 else (0, 0, 0))
         self.assertEqual(sim.run(), "Arrived at centre")
         self.assertTrue(sim.spins(3600, 3700))
         self.assertTrue(all(e[4] <= 20 for e in sim.spins()))
 
     def test_no_initial_fix_never_moves(self):
-        sim = Sim(quality=lambda t: 90)
+        sim = Sim(quality=lambda t: 80)
         self.assertEqual(sim.run(), "Stopped: no GPS lock")
         self.assertEqual(sim.now, 5000)
         self.assertFalse(sim.spins())
+
+    def test_estimated_quality_90_is_accepted(self):
+        sim = Sim(quality=lambda t: 90, pose=lambda t: (0, 0, 0))
+        self.assertEqual(sim.run(), "Arrived at centre")
 
     def test_invalid_pose_or_disconnected_sensor_never_resumes(self):
         for failure in ("bounds", "nan", "disconnected", "calibrating"):

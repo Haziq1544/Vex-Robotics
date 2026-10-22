@@ -10,8 +10,8 @@
     "mass_kg": 6.5,
     "motor_free_rpm": 200.0,
     "motor_stall_torque_nm": 1.05,
-    "left_port": 9,
-    "right_port": 10,
+    "left_port": 10,
+    "right_port": 9,
     "left_mount_sign": 1,
     "right_mount_sign": -1,
     "gps_port": 18,
@@ -21,6 +21,7 @@
   },
   "physics": {
     "traction_mu": 0.8,
+    "motor_deadband_percent": 6.0,
     "lateral_mu": 0.15,
     "rolling_drag_n_per_m_s": 1.2,
     "lateral_damping_per_s": 8.0,
@@ -35,6 +36,7 @@
   },
   "gps": {
     "sample_hz": 20.0,
+    "estimated_position_ms": 500.0,
     "latency_ms": 80.0,
     "position_noise_mm": 3.0,
     "heading_noise_deg": 0.25,
@@ -49,6 +51,7 @@
     "Green 200 RPM is specified by VEX. 1.05 Nm is an ideal gear-ratio estimate from the documented 2.1 Nm red100 RPM stall torque.",
     "All friction, motor response, wheel inertia, GPS noise/delay/dropout settings are tunable approximations, not measured VEX specifications.",
     "Robot collision shape is a fixed rectangle centered at the drive turning center; raised/folded mechanisms are not separately simulated.",
-    "Physical GPS mount is independent of Gps(...) code offsets: wrong code offsets produce biased simulated readings. Ports remain 9, 10 and 18."
+    "Physical GPS mount is independent of Gps(...) code offsets: wrong code offsets produce biased simulated readings. Left motor10, right motor9, GPS18.",
+    "The 6 percent breakaway deadband and 500 ms estimated GPS position interval are editable illustrative estimates, not hardware calibration. Set either to zero to disable that approximation."
   ]
 }

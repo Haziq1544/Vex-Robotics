@@ -621,8 +621,8 @@ class SimulatorApp:
         self.stop()
         self._clear_outputs()
         self._cancel_placement()
-        self.apply_start()
-        self.status.set("Reset run — robot and elements restored to their starting positions")
+        if self.apply_start():
+            self.status.set("Reset run — robot and elements restored to their starting positions")
 
     def _clear_outputs(self):
         self.snapshot = None
@@ -630,6 +630,7 @@ class SimulatorApp:
         self.target = None
         self.trail = []
         self._log_history = []
+        self._log_line_count = 0
         self._brain_text = None
         for widget in (self.brain_display, self.console):
             widget.configure(state="normal")
@@ -705,10 +706,13 @@ class SimulatorApp:
             self.brain_display.configure(state="disabled")
             self._brain_text = brain_text
         logs = snapshot.get("logs", [])
-        old_count = len(self._log_history) if logs[:len(self._log_history)] == self._log_history else 0
+        line_count = snapshot.get("log_line_count", len(logs))
+        previous_count = getattr(self, "_log_line_count", 0)
+        old_count = max(0, len(logs) - max(0, line_count - previous_count))
         for line in logs[old_count:]:
             self._append_console(line)
         self._log_history = list(logs)
+        self._log_line_count = line_count
         self._telemetry()
         self.redraw()
 
@@ -1073,6 +1077,7 @@ class ModelSettings:
             ("gps", "position_noise_mm", "Position noise (mm)"),
             ("gps", "heading_noise_deg", "Heading noise (degrees)"),
             ("gps", "turn_dropout_deg_s", "Visual loss above turn rate (°/s)"),
+            ("gps", "estimated_position_ms", "Estimated GPS grace period (ms)"),
             ("gps", "wall_min_distance_mm", "Minimum visible wall distance (mm)"),
         ],
         "Field & engine": [
@@ -1084,6 +1089,7 @@ class ModelSettings:
         ],
         "Physics": [
             ("physics", "traction_mu", "Forward tire friction (estimated)"),
+            ("physics", "motor_deadband_percent", "Breakaway deadband % (estimated)"),
             ("physics", "lateral_mu", "Sideways tire friction (estimated)"),
             ("physics", "motor_response_s", "Motor response time (seconds)"),
             ("physics", "brake_response_s", "Brake response time (seconds)"),
@@ -1121,7 +1127,7 @@ class ModelSettings:
                 var = tk.StringVar(value=str(self.working[section][key]))
                 self.values[(section, key)] = var
                 ttk.Entry(tab, textvariable=var, width=13).grid(row=row, column=1, sticky="e", pady=6)
-        self.note = tk.StringVar(value="Motor ports 9 / 10 and GPS port 18 follow the project wiring.")
+        self.note = tk.StringVar(value="Left motor 10, right motor 9; GPS port 18.")
         ttk.Label(container, textvariable=self.note, style="Muted.TLabel", wraplength=610).pack(anchor="w", pady=10)
         actions = ttk.Frame(container)
         actions.pack(fill="x")
@@ -1145,7 +1151,8 @@ class ModelSettings:
             except ValueError:
                 raise ValueError("Enter a valid number for " + key + ".") from None
         nonnegative = {"latency_ms", "position_noise_mm", "heading_noise_deg", "wall_min_distance_mm",
-                       "traction_mu", "lateral_mu", "restitution", "turn_dropout_deg_s"}
+                       "traction_mu", "lateral_mu", "restitution", "turn_dropout_deg_s",
+                       "motor_deadband_percent", "estimated_position_ms"}
         signed = {"gps_x_mm", "gps_y_mm", "gps_heading_deg", "seed"}
         for (section, key) in self.values:
             value = result[section][key]
@@ -1176,10 +1183,18 @@ class ModelSettings:
             merged = _merge(self.app.config, incoming)
             for section, key in self.values:
                 float(merged[section][key])
-            self._set_fields(merged)
-            self._read()
+            old_working = self.working
+            old_values = {key: variable.get() for key, variable in self.values.items()}
+            try:
+                self._set_fields(merged)
+                self._read()
+            except (ValueError, TypeError, KeyError, tk.TclError):
+                self.working = old_working
+                for key, value in old_values.items():
+                    self.values[key].set(value)
+                raise
             self.note.set("Loaded " + Path(filename).name + ". Apply to use these settings.")
-        except (OSError, ValueError, TypeError, KeyError) as error:
+        except (OSError, ValueError, TypeError, KeyError, tk.TclError) as error:
             messagebox.showerror("Could not load model", str(error), parent=self.window)
 
     def save(self):

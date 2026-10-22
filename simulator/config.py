@@ -55,9 +55,9 @@ def validate_config(config):
         "simulation": ("step_ms",),
     }
     nonnegative = {
-        "physics": ("traction_mu", "lateral_mu", "rolling_drag_n_per_m_s",
+        "physics": ("motor_deadband_percent", "traction_mu", "lateral_mu", "rolling_drag_n_per_m_s",
                     "lateral_damping_per_s", "yaw_drag_nm_per_rad_s", "restitution"),
-        "gps": ("latency_ms", "position_noise_mm", "heading_noise_deg",
+        "gps": ("estimated_position_ms", "latency_ms", "position_noise_mm", "heading_noise_deg",
                 "turn_dropout_deg_s", "wall_min_distance_mm"),
     }
     defaults = default_config()
@@ -79,6 +79,8 @@ def validate_config(config):
             if config[section][key] < 0:
                 raise ValueError(section + "." + key + " cannot be negative")
     robot, field, physics = config["robot"], config["field"], config["physics"]
+    if not 0 <= physics["motor_deadband_percent"] < 100:
+        raise ValueError("Motor deadband must be between 0 and 100 (exclusive)")
     for key in ("left_mount_sign", "right_mount_sign"):
         if robot[key] not in (-1, 1):
             raise ValueError("robot." + key + " must be -1 or 1")

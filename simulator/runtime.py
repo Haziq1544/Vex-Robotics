@@ -34,6 +34,10 @@ class GPSModel:
         self.next_sample = 0.0
         self.pending = deque()
         self.last = None
+        self.optical_loss_since = None
+        self.estimated_sensor_xy = None
+        self.sample_time = 0.0
+        self.sample_heading = world.heading_deg
 
     def configure(self, x_mm, y_mm, heading_deg):
         self.offset = (x_mm, y_mm, heading_deg)
@@ -71,6 +75,32 @@ class GPSModel:
                 heading = (heading + self.rng.gauss(0, cfg["heading_noise_deg"])) % 360
             if now < self.loss_until or now < self.calibrating_until:
                 quality = 0
+            if quality == 100:
+                self.optical_loss_since = None
+                self.estimated_sensor_xy = (x, y)
+            elif quality == 80 and self.estimated_sensor_xy is not None:
+                if self.optical_loss_since is None:
+                    self.optical_loss_since = now
+                if now - self.optical_loss_since < cfg["estimated_position_ms"] / 1000:
+                    quality = 90
+                    # Wheel-based extrapolation is intentionally vulnerable to slip.
+                    dt = now - self.sample_time
+                    h = math.radians(self.world.heading_deg)
+                    speed = sum(self.world.wheel_speed) / 2 * 1000
+                    ex, ey = self.estimated_sensor_xy
+                    previous_h = math.radians(self.sample_heading)
+                    robot = self.config["robot"]
+                    ox, oy = robot["gps_x_mm"], robot["gps_y_mm"]
+                    mount_dx = ox * (math.cos(h) - math.cos(previous_h)) + oy * (math.sin(h) - math.sin(previous_h))
+                    mount_dy = -ox * (math.sin(h) - math.sin(previous_h)) + oy * (math.cos(h) - math.cos(previous_h))
+                    self.estimated_sensor_xy = (ex + speed * math.sin(h) * dt + mount_dx,
+                                                ey + speed * math.cos(h) * dt + mount_dy)
+                x, y = self.estimated_sensor_xy
+            else:
+                self.optical_loss_since = None
+                self.estimated_sensor_xy = None
+            self.sample_time = now
+            self.sample_heading = self.world.heading_deg
             latency = cfg["latency_ms"] / 1000 if self.mode == "realistic" else 0
             self.pending.append((now + latency, (x, y, heading, quality)))
             self.next_sample = now + 1 / cfg["sample_hz"]
@@ -191,11 +221,14 @@ class _Runtime:
         self.lines = [""] * 12
         self.logs = []
         self.log_revision = 0
+        self.log_line_count = 0
         self.namespace = {}
         self.error: str | None = None
 
     def log(self, *args, sep=" ", end="\n", **kwargs):
-        self.logs.extend((sep.join(str(a) for a in args) + end).rstrip("\n").splitlines())
+        lines = (sep.join(str(a) for a in args) + end).rstrip("\n").splitlines()
+        self.logs.extend(lines)
+        self.log_line_count += len(lines)
         self.logs = self.logs[-200:]
         self.log_revision += 1
 
@@ -208,7 +241,7 @@ class _Runtime:
         return {"type": "snapshot", "time_s": self.world.time_s,
                 "world": self.world.snapshot(), "gps": self.gps.read(),
                 "brain_lines": list(self.lines), "logs": list(self.logs),
-                "log_revision": self.log_revision, "target": target,
+                "log_revision": self.log_revision, "log_line_count": self.log_line_count, "target": target,
                 "status": str(self.namespace.get("run_status", "Running program")),
                 "error": self.error or self.scheduler.error, "paused": paused}
 
@@ -486,6 +519,16 @@ def _worker_main(connection, config, program_path, start_pose, realtime, speed, 
                 elif delay < -0.25:
                     next_wall = time.monotonic()
         runtime.brake()
+        # Finish the physical braking motion after robot execution ends.
+        runtime.scheduler.close()
+        settling_started = runtime.world.time_s
+        while runtime.world.time_s - settling_started < 2.0:
+            if (math.hypot(runtime.world.vx, runtime.world.vy) < 0.001
+                    and abs(runtime.world.omega) < math.radians(0.1)
+                    and max(abs(v) for v in runtime.world.wheel_speed) < 0.001):
+                break
+            runtime.world.step(dt)
+            runtime.gps.update()
         connection.send(runtime.snapshot(True))
         connection.send({"type": "exit", "reason": reason, "message": str(runtime.namespace.get("run_status", reason)),
                          "error": runtime.error})

@@ -33,4 +33,8 @@ See [simulator instructions](simulator/README.md) and [model assumptions](simula
 python -m unittest discover -s tests -v
 ```
 
-The robot code uses motor ports **9** and **10**, and GPS port **18**. Simulator files run on the computer; the VEX project uploads `src/main.py`.
+The robot code uses left motor port **10**, right motor port **9**, and GPS port **18**. Simulator files run on the computer; the VEX project uploads `src/main.py`.
+
+GPS navigation accepts quality 90 or higher and still targets (0, 0). The minimum turn command is now 12%, an initial hardware tuning value. Motor connectivity is checked before navigation.
+
+The simulator includes an editable 6% breakaway deadband and a 500 ms estimated-position phase at GPS quality 90 during optical loss, followed by quality 80. These are approximations, not measured VEX behavior. Program completion integrates up to two seconds of braking travel. Recovery-test expectations were updated, but tests have not been run for these changes.

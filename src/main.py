@@ -10,8 +10,8 @@ DRIVE_CARTRIDGE = GearSetting.RATIO_18_1
 # Verify these directions with the wheels lifted before the first driving test.
 LEFT_REVERSED = False
 RIGHT_REVERSED = True
-left_motor = Motor(Ports.PORT9, DRIVE_CARTRIDGE, LEFT_REVERSED)
-right_motor = Motor(Ports.PORT10, DRIVE_CARTRIDGE, RIGHT_REVERSED)
+left_motor = Motor(Ports.PORT10, DRIVE_CARTRIDGE, LEFT_REVERSED)
+right_motor = Motor(Ports.PORT9, DRIVE_CARTRIDGE, RIGHT_REVERSED)
 
 # User-measured turning-centre-to-lens offsets: right +X, forward +Y.
 # GPS faces backward; robot forward is toward the claw.
@@ -27,7 +27,7 @@ TARGET_X_MM = 0
 TARGET_Y_MM = 0
 ARRIVAL_RADIUS_MM = 100
 ARRIVAL_SETTLE_MS = 500
-MIN_GPS_QUALITY = 100  # Require position calculated from the field-code strips.
+MIN_GPS_QUALITY = 90  # Allow estimated position between field-code fixes; below 90, brake.
 GPS_LOCK_MS = 500
 GPS_LOCK_TIMEOUT_MS = 5000
 GPS_RECOVERY_TIMEOUT_MS = 2000  # Brake and allow a brief loss of optical lock.
@@ -41,7 +41,7 @@ TURN_PROGRESS_DEG = 3
 MAX_DRIVE_PERCENT = 50
 MIN_DRIVE_PERCENT = 8
 MAX_TURN_PERCENT = 20  # Slower initial setting to reduce GPS loss during turns.
-MIN_TURN_PERCENT = 6
+MIN_TURN_PERCENT = 12  # Starting estimate; confirm reliable rotation on the real drivetrain.
 DISTANCE_GAIN = 0.04
 TURN_GAIN = 0.35
 STEERING_GAIN = 0.3
@@ -181,6 +181,8 @@ def drive_to_centre():
     stop_drive()
     distance_to_target = None
     heading_error = None
+    if not left_motor.installed() or not right_motor.installed():
+        return "Stopped: check motors L10 R9"
     if gps_status != "Ready" or not GPS_MOUNT_CONFIGURED:
         return "Stopped: GPS not ready"
 

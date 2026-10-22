@@ -15,8 +15,8 @@ class PhysicsTests(unittest.TestCase):
         return World(default_config(), {"x_mm": 0, "y_mm": 0, "heading_deg": 0, **pose})
 
     def drive(self, world, left, right):
-        world.set_motor(9, {"percent": left, "brake": "brake"})
-        world.set_motor(10, {"percent": -right, "brake": "brake"})
+        world.set_motor(world.robot["left_port"], {"percent": left, "brake": "brake"})
+        world.set_motor(world.robot["right_port"], {"percent": -right, "brake": "brake"})
 
     def run_for(self, world, duration):
         for _ in range(round(duration / 0.01)):

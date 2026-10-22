@@ -132,6 +132,8 @@ class World:
         sign = self.robot["left_mount_sign" if index == 0 else "right_mount_sign"]
         target = command["percent"] * sign / 100 * self.free_speed
         speed = self.wheel_speed[index]
+        if 0 < abs(command["percent"]) <= p["motor_deadband_percent"] and abs(speed) < 0.001:
+            return 0.0  # Editable approximation of motor/drivetrain breakaway resistance.
         effective_mass = p["wheel_effective_mass_kg"] + self.mass / 2
         if command["percent"] == 0:
             if command["brake"] == "coast":

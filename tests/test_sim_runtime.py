@@ -50,7 +50,7 @@ class SensorAndAdapterTests(unittest.TestCase):
     def test_motor_reversal_and_callable_accessors(self):
         runtime = _Runtime(default_config(), {"x_mm": 0, "y_mm": 0, "heading_deg": 0}, "ideal")
         vex = build_vex_module(runtime).__dict__
-        left, right = vex["Motor"](9), vex["Motor"](10, vex["GearSetting"].RATIO_18_1, True)
+        left, right = vex["Motor"](10), vex["Motor"](9, vex["GearSetting"].RATIO_18_1, True)
         for motor in (left, right):
             motor.spin(vex["FORWARD"], 50, vex["PERCENT"])
         runtime.world.step(.5)
